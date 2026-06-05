@@ -22,6 +22,9 @@
    - 每个请求有独立状态、结果和历史记录
    - 实际并发能力取决于上游 API 的限流策略
 
+<img width="1919" height="873" alt="image" src="https://github.com/user-attachments/assets/716b52da-2861-4584-80dd-2557a5fdd70b" />
+
+
 ## 环境要求
 
 建议使用：
