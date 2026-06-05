@@ -1,5 +1,5 @@
 # Image2 Generation App
-
+<img width="1710" height="865" alt="image" src="https://github.com/user-attachments/assets/409e99aa-b6a0-4bee-a421-92d6d6eae0e7" />
 一个面向 `gpt-image-2` / OpenAI 兼容图片接口的本地 Web 应用，支持生图、参考图改图、历史记录、图片预览和再次编辑。
 
 ## 功能特点
@@ -21,8 +21,6 @@
    - 多个请求可以并行进行
    - 每个请求有独立状态、结果和历史记录
    - 实际并发能力取决于上游 API 的限流策略
-
-<img width="1919" height="873" alt="image" src="https://github.com/user-attachments/assets/716b52da-2861-4584-80dd-2557a5fdd70b" />
 
 
 ## 环境要求
