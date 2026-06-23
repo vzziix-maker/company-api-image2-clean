@@ -1,42 +1,29 @@
 # Image2 Generation App
-<img width="1710" height="865" alt="image" src="https://github.com/user-attachments/assets/409e99aa-b6a0-4bee-a421-92d6d6eae0e7" />
-一个面向 `gpt-image-2` / OpenAI 兼容图片接口的本地 Web 应用，支持生图、参考图改图、历史记录、图片预览和再次编辑。
 
-## 功能特点
+一个面向 `gpt-image-2` / OpenAI 兼容图片接口的本地 Web 应用。支持无参考图生图、有参考图自动改图、历史记录、图片预览、再次编辑、复制、下载和导入。
 
-1. 友好的交互形式
-   - 支持点击、拖动上传参考图
-   - 支持拖动交换参考图位置
-   - 支持图片预览、下载、复制、导入
-   - 支持从历史结果再次编辑
+## Features
 
-2. 丰富的参数预设
-   - 支持预设尺寸
-   - 支持宽高比 + 分辨率模式
-   - 支持质量、格式、背景、数量选择
-   - 数量范围为 1-4 张
+- 自动路由：有参考图时走图片编辑接口，没有参考图时走图片生成接口。
+- 多图参考：最多 5 张参考图，支持点击选择、拖拽上传、粘贴上传和拖动换位。
+- 参数控制：支持智能尺寸、直接尺寸、宽高比 + 分辨率、质量和数量。
+- 历史记录：保存成功、失败、取消和生成中的任务，支持查看、再次编辑、取消、删除和滚动加载。
+- 图片查看器：支持鼠标拖动查看，支持 `A/D` 和左右方向键切换。
+- 模型设置：右上角可填写 Base URL 和 Key，并验证是否支持 `gpt-image-2`。
+- 暗色界面：基于 shadcn/ui + Tailwind 的默认 dark 风格。
 
-3. 多并发工作流
-   - 支持多个工作区
-   - 多个请求可以并行进行
-   - 每个请求有独立状态、结果和历史记录
-   - 实际并发能力取决于上游 API 的限流策略
-
-
-## 环境要求
-
-建议使用：
+## Requirements
 
 - Node.js 20.19+ 或 22.12+
 - npm
 
-## 安装
+## Install
 
 ```bash
 npm install
 ```
 
-## 开发运行
+## Run
 
 ```bash
 npm run dev
@@ -44,127 +31,118 @@ npm run dev
 
 默认地址：
 
-- 前端：`http://localhost:5173`
-- 后端 API：`http://localhost:8787`
+- Frontend: `http://localhost:5173`
+- API server: `http://localhost:8787`
 
 开发模式下，Vite 会把 `/api` 请求代理到后端服务。
 
-## 使用方法
-
-1. 打开页面右上角的 `API 设置`
-2. 填写 `Base URL`
-   - 示例：`https://your-image-api.example.com/v1`
-   - 需要是 OpenAI 兼容 API 地址
-3. 填写 `API Key`
-4. 点击 `检测连接`
-5. 检测通过后点击 `保存`
-6. 输入 Prompt 后点击生成图片
-7. 如果上传了参考图，会自动进入改图流程；没有参考图则走生图流程
-
-API 设置会保存在本地 `.data/api-config.json` 中。这个文件包含 API Key，不要提交或分享。
-
-## 图片输入
-
-参考图区域支持：
-
-- 点击选择图片
-- 拖入图片
-- 拖动图片交换位置
-- 鼠标悬停在坑位后使用 `Ctrl/Cmd + V` 粘贴图片
-
-最多支持 5 张参考图。上传参考图后会走图片编辑接口；不上传参考图时走图片生成接口。
-
-Mask 是可选项，并且作用于第 1 张参考图。
-
-## 参数说明
-
-支持两种尺寸控制方式：
-
-- 直接尺寸：选择预设尺寸
-- 比例 + 分辨率：选择宽高比和 `1K` / `2K` / `4K`
-
-可选参数包括：
-
-- 质量：`low` / `medium` / `high` / `auto`
-- 格式：`png` / `jpeg`
-- 背景：`auto` / `opaque` / `transparent`
-- 数量：`1` 到 `4`
-
-注意：
-
-- `gpt-image-2` 不支持透明背景
-- `jpeg` 格式不支持透明背景
-- 宽高比和分辨率会被转换成实际发送给 API 的 `size`
-
-## 环境变量
-
-也可以通过环境变量提供 API 配置，作为本地测试或私有部署的 fallback：
+如果本机 `8787` 已被其他项目占用，可以指定端口运行：
 
 ```bash
-IMAGE_API_BASE_URL=https://your-image-api.example.com/v1
+PORT=18787 npm run dev:server
+```
+
+另开一个终端：
+
+```bash
+VITE_API_PROXY_TARGET=http://localhost:18787 npm run dev:client -- --host 0.0.0.0 --port 5173
+```
+
+## API Settings
+
+推荐在页面右上角「模型设置」中配置：
+
+1. 填写 OpenAI 兼容接口的 `Base URL`，例如 `https://your-provider.example.com/v1`
+2. 填写 API Key
+3. 点击「验证」，应用会请求 `${BASE_URL}/models` 并确认存在 `gpt-image-2`
+4. 点击「保存」
+
+保存后的配置写入 `.data/settings.json`。该文件可能包含 API Key，已被 `.gitignore` 忽略，不要提交到 GitHub。
+
+也可以使用环境变量作为 fallback：
+
+```bash
+IMAGE_API_BASE_URL=https://your-provider.example.com/v1
 IMAGE_API_KEY=sk-your-key-here
-IMAGE_API_TIMEOUT_MS=1800000
+IMAGE_API_TIMEOUT_MS=3600000
 PORT=8787
 ```
 
-支持的别名：
+兼容别名：
 
-```bash
+```text
 LLM_API_BASE_URL / LLM_API_KEY
 OPENAI_BASE_URL / OPENAI_API_BASE_URL / OPENAI_API_KEY
 DEER_API_BASE_URL / DEER_API_KEY / DEER_API_TIMEOUT_MS
 ```
 
-优先推荐在页面右上角 `API 设置` 中配置。
+## Usage
 
-## 可用脚本
+1. 输入 Prompt。
+2. 可选上传参考图；有参考图时自动改图，无参考图时自动生图。
+3. 选择尺寸控制、质量和数量。
+4. 点击「生成图片」，或在 Prompt 输入框中按 Enter 发送。
+5. 在右侧历史记录中查看任务，或点击「再次编辑」把参数带回输入区。
+
+## Parameters
+
+尺寸控制：
+
+- 智能：生图默认 `9:16`；改图时按最靠前参考图的比例或原始尺寸推导。
+- 直接尺寸：直接选择预设尺寸。
+- 比例 + 分辨率：选择宽高比和 `1K` / `2K` / `4K`。
+
+其他参数：
+
+- 质量：`low` / `medium` / `high` / `auto`
+- 数量：`1` 到 `4`
+
+注意：应用会把宽高比和分辨率转换成实际发送给 API 的 `size`。
+
+## Scripts
 
 ```bash
 npm run dev
-```
-
-同时启动前端和后端。
-
-```bash
 npm run build
-```
-
-构建前端产物。
-
-```bash
 npm run preview
 ```
-
-预览前端构建产物。注意：这不会单独启动 Express API 服务，因此不等同于完整应用运行。
 
 测试脚本：
 
 ```bash
-npm run test:generate
-npm run test:params
-npm run test:persistent-history
 npm run test:payload-routing
+npm run test:history-pagination
+npm run test:persistent-history
 npm run test:rate-limit
 ```
 
-## 安全说明
+`npm run test:params` 和 `npm run test:generate` 会向当前配置的真实图片接口发请求，运行前请确认端口和 API 配置，避免误消耗额度。
 
-不要提交或分享以下文件和目录：
+## Local Data And Security
+
+不要提交或公开以下文件和目录：
 
 ```text
 .data/
-.env.local
+.env
+.env.*
 node_modules/
 dist/
+pet-runs/
+.playwright-cli/
 ```
 
 其中：
 
-- `.data/api-config.json` 会保存 API Key
-- `.data/history.json` 和 `.data/history-assets/` 会保存生成历史和图片资产
-- `.env.local` 可能包含本地私有配置
-- `node_modules/` 和 `dist/` 是本地依赖和构建产物，不需要分享
+- `.data/settings.json` 保存模型 Base URL / Key 和本地参数设置。
+- `.data/history.json` 保存历史记录元数据。
+- `.data/history-assets/` 保存历史生成图和参考图。
+- `.env.local` 可能保存私有 API Key。
 
-项目的 `.gitignore` 已默认忽略这些本地文件，因此通过 Git 推送代码时它们不会被提交。
+这些路径已在 `.gitignore` 中忽略。上传 GitHub 前仍建议执行一次：
 
-如果你是手动压缩整个项目文件夹分享，`.gitignore` 不会自动生效，请手动排除以上文件和目录。
+```bash
+git status --short --ignored
+```
+
+确认敏感文件只出现在 `!!` ignored 列表中。

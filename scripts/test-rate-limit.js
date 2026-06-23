@@ -1,12 +1,8 @@
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 
 const mockPort = 18878;
 const appPort = 18879;
-const appDataDir = await mkdtemp(join(tmpdir(), "image2-rate-limit-"));
 const retryAfter = 24;
 const message =
   "Your requests to gpt-image-2 for gpt-image-2 in East US 2 have exceeded the call rate limit for your current OpenAI S0 pricing tier. This request was for ImageGenerations_Create under Azure OpenAI API version 2025-04-01-preview. Please retry after 24 seconds.";
@@ -33,7 +29,6 @@ const child = spawn(process.execPath, ["server/index.js"], {
     PORT: String(appPort),
     DEER_API_BASE_URL: `http://localhost:${mockPort}/v1`,
     DEER_API_KEY: "test-key",
-    APP_DATA_DIR: appDataDir,
     HISTORY_LIMIT: "5",
   },
   stdio: ["ignore", "pipe", "pipe"],
@@ -91,5 +86,4 @@ try {
 } finally {
   child.kill("SIGTERM");
   await new Promise((resolve) => mock.close(resolve));
-  await rm(appDataDir, { recursive: true, force: true });
 }

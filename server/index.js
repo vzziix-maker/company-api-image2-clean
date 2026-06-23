@@ -5,6 +5,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import multer from "multer";
+import { Agent } from "undici";
 
 const app = express();
 const upload = multer({
@@ -15,28 +16,35 @@ const upload = multer({
 });
 
 const PORT = Number(process.env.PORT || 8787);
-const FALLBACK_IMAGE_API_BASE_URL = (
+const IMAGE_API_BASE_URL = (
   process.env.IMAGE_API_BASE_URL ||
   process.env.LLM_API_BASE_URL ||
   process.env.OPENAI_BASE_URL ||
   process.env.OPENAI_API_BASE_URL ||
   process.env.DEER_API_BASE_URL ||
-  ""
+  "https://api.deerapi.com/v1"
 ).replace(/\/$/, "");
-const FALLBACK_IMAGE_API_KEY =
+const IMAGE_API_KEY =
   process.env.IMAGE_API_KEY ||
   process.env.LLM_API_KEY ||
   process.env.OPENAI_API_KEY ||
   process.env.DEER_API_KEY;
-const REQUEST_TIMEOUT_MS = Number(process.env.DEER_API_TIMEOUT_MS || process.env.IMAGE_API_TIMEOUT_MS || 1800000);
-const HISTORY_LIMIT = Number(process.env.HISTORY_LIMIT || 30);
+const REQUEST_TIMEOUT_MS = Number(process.env.DEER_API_TIMEOUT_MS || process.env.IMAGE_API_TIMEOUT_MS || 3600000);
+const UPSTREAM_HEADERS_TIMEOUT_MS = Number(
+  process.env.IMAGE_API_HEADERS_TIMEOUT_MS || process.env.DEER_API_HEADERS_TIMEOUT_MS || REQUEST_TIMEOUT_MS
+);
+const UPSTREAM_BODY_TIMEOUT_MS = Number(
+  process.env.IMAGE_API_BODY_TIMEOUT_MS || process.env.DEER_API_BODY_TIMEOUT_MS || REQUEST_TIMEOUT_MS
+);
+const HISTORY_LIMIT = Number(process.env.HISTORY_LIMIT || 500);
+const DEFAULT_HISTORY_PAGE_SIZE = 30;
+const MAX_HISTORY_PAGE_SIZE = 100;
 const DATA_DIR = process.env.APP_DATA_DIR
   ? pathToFileURL(`${resolve(process.env.APP_DATA_DIR)}/`)
   : new URL("../.data/", import.meta.url);
 const HISTORY_DIR = DATA_DIR;
 const HISTORY_FILE = new URL("history.json", DATA_DIR);
 const SETTINGS_FILE = new URL("settings.json", DATA_DIR);
-const API_CONFIG_FILE = new URL("api-config.json", DATA_DIR);
 const HISTORY_ASSETS_DIR = new URL("history-assets/", DATA_DIR);
 const MAX_EDIT_IMAGES = 5;
 const SMART_SIZE_VALUE = "smart";
@@ -59,6 +67,10 @@ const RESOLUTION_LONG_EDGE = {
   "4K": 3840,
 };
 const activeJobs = new Map();
+const upstreamDispatcher = new Agent({
+  headersTimeout: UPSTREAM_HEADERS_TIMEOUT_MS,
+  bodyTimeout: UPSTREAM_BODY_TIMEOUT_MS,
+});
 let historyWriteQueue = Promise.resolve();
 
 app.use(express.json({ limit: "1mb" }));
@@ -84,6 +96,25 @@ async function writeHistory(items) {
   await mkdir(HISTORY_DIR, { recursive: true });
   const limitedItems = Number.isFinite(HISTORY_LIMIT) ? items.slice(0, HISTORY_LIMIT) : items;
   await writeFile(HISTORY_FILE, JSON.stringify(limitedItems, null, 2));
+}
+
+function numberInRange(value, fallback, min, max) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(max, Math.max(min, Math.floor(number)));
+}
+
+function paginateHistory(items, { cursor, limit }) {
+  const startIndex = cursor ? items.findIndex((item) => item.id === cursor) + 1 : 0;
+  const offset = startIndex > 0 ? startIndex : 0;
+  const pageItems = items.slice(offset, offset + limit);
+  const nextIndex = offset + pageItems.length;
+  return {
+    items: pageItems,
+    nextCursor: nextIndex < items.length ? pageItems.at(-1)?.id || null : null,
+    hasMore: nextIndex < items.length,
+    total: items.length,
+  };
 }
 
 function withHistoryWriteLock(operation) {
@@ -240,96 +271,96 @@ async function writeSettings(settings) {
   await writeFile(SETTINGS_FILE, JSON.stringify(settings, null, 2));
 }
 
-function normalizeBaseUrl(value, fallback = "") {
-  const baseUrl = normalizeString(value, fallback).replace(/\/+$/, "");
+function requireProviderConfig(provider) {
+  if (!provider?.apiKey) {
+    const error = new Error("Missing image API key. Fill provider settings or create .env.local before generating.");
+    error.status = 500;
+    throw error;
+  }
+  if (!provider?.baseUrl) {
+    const error = new Error("Missing image API base URL. Fill provider settings or create .env.local before generating.");
+    error.status = 500;
+    throw error;
+  }
+}
+
+function normalizeBaseUrl(value) {
+  const baseUrl = normalizeString(value, "");
   if (!baseUrl) return "";
   try {
-    const parsed = new URL(baseUrl);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "";
-    return parsed.toString().replace(/\/+$/, "");
+    const url = new URL(baseUrl);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return "";
+    return url.toString().replace(/\/$/, "");
   } catch {
     return "";
   }
 }
 
-function normalizeApiKey(value) {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function maskApiKey(value) {
-  const key = normalizeApiKey(value);
-  if (!key) return "";
-  if (key.length <= 8) return "••••";
-  return `${key.slice(0, 4)}••••${key.slice(-4)}`;
-}
-
-function sanitizeApiConfig(config = {}) {
+function getDefaultProviderSettings() {
   return {
-    baseUrl: normalizeBaseUrl(config.baseUrl),
-    apiKey: normalizeApiKey(config.apiKey),
+    baseUrl: normalizeBaseUrl(IMAGE_API_BASE_URL),
+    apiKey: normalizeString(IMAGE_API_KEY, ""),
+    source: "env",
   };
 }
 
-function publicApiConfig(config = {}) {
-  const sanitized = sanitizeApiConfig(config);
+function sanitizeProviderSettings(provider = {}) {
   return {
-    baseUrl: sanitized.baseUrl,
-    hasApiKey: Boolean(sanitized.apiKey),
-    apiKeyPreview: maskApiKey(sanitized.apiKey),
+    baseUrl: normalizeBaseUrl(provider.baseUrl),
+    apiKey: normalizeString(provider.apiKey, ""),
+    savedAt: normalizeString(provider.savedAt, ""),
   };
 }
 
-async function readSavedApiConfig() {
-  try {
-    return sanitizeApiConfig(JSON.parse(await readFile(API_CONFIG_FILE, "utf8")));
-  } catch (error) {
-    if (error.code === "ENOENT") return { baseUrl: "", apiKey: "" };
-    throw error;
-  }
+async function readProviderSettings() {
+  const settings = await readSettings();
+  const saved = sanitizeProviderSettings(settings?.provider);
+  const fallback = getDefaultProviderSettings();
+  return {
+    baseUrl: saved.baseUrl || fallback.baseUrl,
+    apiKey: saved.apiKey || fallback.apiKey,
+    source: saved.baseUrl && saved.apiKey ? "saved" : fallback.source,
+    savedAt: saved.savedAt,
+  };
 }
 
-async function writeApiConfig(config) {
-  const sanitized = sanitizeApiConfig(config);
-  if (!sanitized.baseUrl) {
-    const error = new Error("Base URL 无效。请填写完整的 http(s) 地址。");
+function publicProviderSettings(provider) {
+  return {
+    baseUrl: provider.baseUrl,
+    hasApiKey: Boolean(provider.apiKey),
+    source: provider.source,
+    savedAt: provider.savedAt || null,
+  };
+}
+
+async function updateProviderSettings(provider) {
+  const baseUrl = normalizeBaseUrl(provider?.baseUrl);
+  const apiKey = normalizeString(provider?.apiKey, "");
+  if (!baseUrl) {
+    const error = new Error("Base URL is invalid.");
     error.status = 400;
     throw error;
   }
-  if (!sanitized.apiKey) {
-    const error = new Error("API Key 不能为空。");
+  if (!apiKey) {
+    const error = new Error("API key is required.");
     error.status = 400;
     throw error;
   }
 
-  await mkdir(HISTORY_DIR, { recursive: true });
-  await writeFile(API_CONFIG_FILE, JSON.stringify({
-    ...sanitized,
+  const settings = (await readSettings()) || {};
+  const nextProvider = {
+    baseUrl,
+    apiKey,
     savedAt: new Date().toISOString(),
-  }, null, 2));
-  return sanitized;
-}
-
-async function getImageApiConfig() {
-  const saved = await readSavedApiConfig();
-  return {
-    baseUrl: saved.baseUrl || FALLBACK_IMAGE_API_BASE_URL,
-    apiKey: saved.apiKey || FALLBACK_IMAGE_API_KEY || "",
   };
-}
-
-async function requireConfig() {
-  const config = await getImageApiConfig();
-  if (!config.apiKey) {
-    const error = new Error("Missing API Key. Open API 设置 and save a Base URL and API Key before generating images.");
-    error.status = 500;
-    throw error;
-  }
-  if (!config.baseUrl) {
-    const error = new Error("Missing Base URL. Open API 设置 and save a Base URL and API Key before generating images.");
-    error.status = 500;
-    throw error;
-  }
-  return config;
+  await writeSettings({
+    ...settings,
+    provider: nextProvider,
+  });
+  return {
+    ...nextProvider,
+    source: "saved",
+  };
 }
 
 function normalizeString(value, fallback) {
@@ -774,6 +805,21 @@ function timeoutError() {
   return error;
 }
 
+function upstreamFetchError(error, url, baseUrl = "") {
+  const cause = error.cause || {};
+  const causeCode = error.code || cause.code;
+  const causeMessage = cause.message || error.message;
+  const upstreamError = new Error(`Image API connection failed${causeCode ? ` (${causeCode})` : ""}: ${causeMessage}`);
+  upstreamError.status = 502;
+  upstreamError.code = "upstream_fetch_failed";
+  upstreamError.details = {
+    url: baseUrl ? url.replace(baseUrl, "") : url,
+    causeCode,
+    causeMessage,
+  };
+  return upstreamError;
+}
+
 function canceledJobError() {
   const error = new Error("Request was canceled.");
   error.status = 499;
@@ -785,7 +831,7 @@ function isCanceledJobError(error) {
   return error?.code === "canceled";
 }
 
-async function fetchDeer(url, options, externalSignal) {
+async function fetchDeer(url, options, externalSignal, baseUrl = "") {
   const controller = new AbortController();
   let didTimeout = false;
   const timeoutId = setTimeout(() => {
@@ -806,6 +852,9 @@ async function fetchDeer(url, options, externalSignal) {
     return await fetch(url, {
       ...options,
       signal: controller.signal,
+      dispatcher: upstreamDispatcher,
+      headersTimeout: UPSTREAM_HEADERS_TIMEOUT_MS,
+      bodyTimeout: UPSTREAM_BODY_TIMEOUT_MS,
     });
   } catch (error) {
     if (externalSignal?.aborted) {
@@ -814,81 +863,35 @@ async function fetchDeer(url, options, externalSignal) {
     if (didTimeout || error.name === "TimeoutError" || error.name === "AbortError") {
       throw timeoutError();
     }
-    throw error;
+    const upstreamError = upstreamFetchError(error, url, baseUrl);
+    console.error("Image API fetch failed:", upstreamError.details);
+    throw upstreamError;
   } finally {
     clearTimeout(timeoutId);
     externalSignal?.removeEventListener("abort", abortExternal);
   }
 }
 
-async function testApiConfigConnection(config) {
-  const sanitized = sanitizeApiConfig(config);
-  if (!sanitized.baseUrl || !sanitized.apiKey) {
-    const error = new Error("请先填写 Base URL 和 API Key。");
-    error.status = 400;
-    throw error;
-  }
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 10000);
-  try {
-    const response = await fetch(`${sanitized.baseUrl}/models`, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${sanitized.apiKey}`,
-      },
-      signal: controller.signal,
-    });
-    const contentType = response.headers.get("content-type") || "";
-    const data = contentType.includes("application/json") ? await response.json().catch(() => ({})) : null;
-    if (!response.ok) {
-      const message = data?.error?.message || data?.message || response.statusText || "API 配置检测失败。";
-      const error = new Error(message);
-      error.status = response.status;
-      if (response.status === 401 || response.status === 403) {
-        error.message = "API Key 无效或没有访问权限。";
-      }
-      throw error;
-    }
-    if (!Array.isArray(data?.data)) {
-      const error = new Error("Base URL 不是 OpenAI 兼容 API 地址。请确认地址包含 /v1。");
-      error.status = 400;
-      throw error;
-    }
-    return {
-      ok: true,
-      modelCount: data.data.length,
-    };
-  } catch (error) {
-    if (error.name === "AbortError") {
-      const timeout = new Error("连接检测超时。请确认 Base URL 可访问。");
-      timeout.status = 504;
-      throw timeout;
-    }
-    if (!error.status) {
-      error.status = 502;
-      error.message = "Base URL 不可访问或返回异常。";
-    }
-    throw error;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
 app.get("/api/health", async (_request, response, next) => {
   try {
+    const provider = await readProviderSettings();
     response.json({
       ok: true,
-      apiConfig: publicApiConfig(await getImageApiConfig()),
+      apiBaseUrl: provider.baseUrl,
+      hasApiKey: Boolean(provider.apiKey),
+      provider: publicProviderSettings(provider),
     });
   } catch (error) {
     next(error);
   }
 });
 
-app.get("/api/history", async (_request, response, next) => {
+app.get("/api/history", async (request, response, next) => {
   try {
-    response.json({ items: await readHistory() });
+    const items = await readHistory();
+    const limit = numberInRange(request.query.limit, DEFAULT_HISTORY_PAGE_SIZE, 1, MAX_HISTORY_PAGE_SIZE);
+    const cursor = normalizeHistoryId(request.query.cursor);
+    response.json(paginateHistory(items, { cursor, limit }));
   } catch (error) {
     next(error);
   }
@@ -924,7 +927,9 @@ app.get("/api/settings", async (_request, response, next) => {
 
 app.put("/api/settings", async (request, response, next) => {
   try {
+    const currentSettings = (await readSettings()) || {};
     const settings = {
+      ...currentSettings,
       mode: request.body?.mode === "edit" ? "edit" : "generate",
       config: bodyToUiConfig(request.body?.config || {}),
       savedAt: new Date().toISOString(),
@@ -936,28 +941,51 @@ app.put("/api/settings", async (request, response, next) => {
   }
 });
 
-app.get("/api/api-config", async (_request, response, next) => {
+app.get("/api/provider-settings", async (_request, response, next) => {
   try {
-    response.json({ apiConfig: publicApiConfig(await getImageApiConfig()) });
+    response.json({ provider: publicProviderSettings(await readProviderSettings()) });
   } catch (error) {
     next(error);
   }
 });
 
-app.put("/api/api-config", async (request, response, next) => {
+app.put("/api/provider-settings", async (request, response, next) => {
   try {
-    const apiConfig = await writeApiConfig(request.body || {});
-    response.json({ ok: true, apiConfig: publicApiConfig(apiConfig) });
+    const provider = await updateProviderSettings(request.body || {});
+    response.json({ ok: true, provider: publicProviderSettings(provider) });
   } catch (error) {
     next(error);
   }
 });
 
-app.post("/api/api-config/test", async (request, response, next) => {
+app.post("/api/provider-settings/verify", async (request, response, next) => {
   try {
-    const config = request.body?.apiKey ? request.body : await getImageApiConfig();
-    const result = await testApiConfigConnection(config);
-    response.json({ ok: true, ...result });
+    const provider = {
+      baseUrl: normalizeBaseUrl(request.body?.baseUrl),
+      apiKey: normalizeString(request.body?.apiKey, ""),
+    };
+    requireProviderConfig(provider);
+    const upstreamResponse = await fetchDeer(
+      `${provider.baseUrl}/models`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${provider.apiKey}`,
+        },
+      },
+      undefined,
+      provider.baseUrl,
+    );
+    const data = await parseDeerResponse(upstreamResponse);
+    const models = Array.isArray(data?.data) ? data.data : [];
+    const hasImage2 = models.some((model) => model?.id === "gpt-image-2");
+    if (!hasImage2) {
+      const error = new Error("未在该 Base URL 中找到 gpt-image-2 模型。");
+      error.status = 400;
+      error.details = { modelCount: models.length };
+      throw error;
+    }
+    response.json({ ok: true, model: "gpt-image-2", modelCount: models.length });
   } catch (error) {
     next(error);
   }
@@ -1031,7 +1059,8 @@ app.post("/api/generate", async (request, response, next) => {
   let history;
   const controller = new AbortController();
   try {
-    const apiConfig = await requireConfig();
+    const provider = await readProviderSettings();
+    requireProviderConfig(provider);
     payload = buildPayload(request.body, "generate");
     const clientRequestId = normalizeHistoryId(request.body?.clientRequestId);
     history = await appendHistory({
@@ -1047,14 +1076,14 @@ app.post("/api/generate", async (request, response, next) => {
     });
     activeJobs.set(history.id, { controller, mode: "generate" });
 
-    const deerResponse = await fetchDeer(`${apiConfig.baseUrl}/images/generations`, {
+    const deerResponse = await fetchDeer(`${provider.baseUrl}/images/generations`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${apiConfig.apiKey}`,
+        Authorization: `Bearer ${provider.apiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(payload),
-    }, controller.signal);
+    }, controller.signal, provider.baseUrl);
 
     const data = await parseDeerResponse(deerResponse);
     const clientData = toClientResponse(data);
@@ -1083,6 +1112,7 @@ app.post("/api/generate", async (request, response, next) => {
                 status: error.status || 500,
                 code: error.code,
                 retryAfter: error.retryAfter,
+                details: error.details,
               },
         }));
       } catch (historyError) {
@@ -1114,7 +1144,8 @@ app.post(
     let history;
     const controller = new AbortController();
     try {
-      const apiConfig = await requireConfig();
+      const provider = await readProviderSettings();
+      requireProviderConfig(provider);
       images = collectEditImages(request.files);
       mask = request.files?.mask?.[0];
       if (!images.length) {
@@ -1166,13 +1197,13 @@ app.post(
       });
       activeJobs.set(history.id, { controller, mode: "edit" });
 
-      const deerResponse = await fetchDeer(`${apiConfig.baseUrl}/images/edits`, {
+      const deerResponse = await fetchDeer(`${provider.baseUrl}/images/edits`, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${apiConfig.apiKey}`,
+          Authorization: `Bearer ${provider.apiKey}`,
         },
         body: formData,
-      }, controller.signal);
+      }, controller.signal, provider.baseUrl);
 
       const data = await parseDeerResponse(deerResponse);
       const clientData = toClientResponse(data);
@@ -1201,6 +1232,7 @@ app.post(
                   status: error.status || 500,
                   code: error.code,
                   retryAfter: error.retryAfter,
+                  details: error.details,
                 },
           }));
         } catch (historyError) {

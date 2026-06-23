@@ -1,5 +1,29 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { AlertCircleIcon, SettingsIcon } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Toaster } from "@/components/ui/sonner";
+import { Textarea } from "@/components/ui/textarea";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 import "./styles.css";
 
 const SMART_SIZE_VALUE = "smart";
@@ -13,16 +37,14 @@ const sizeModeOptions = [
   { value: "ratio", label: "比例+分辨率" },
 ];
 const qualityOptions = ["low", "medium", "high", "auto"];
-const outputOptions = ["png", "jpeg"];
-const backgroundOptions = ["auto", "opaque", "transparent"];
 const countOptions = [1, 2, 3, 4];
 const aspectRatioOptions = [SMART_ASPECT_RATIO_VALUE, "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"];
 const resolutionOptions = ["1K", "2K", "4K"];
-const CLIENT_TIMEOUT_MS = 1810000;
+const CLIENT_TIMEOUT_MS = 3610000;
+const HISTORY_PAGE_SIZE = 30;
 const MAX_EDIT_IMAGES = 5;
 const SETTINGS_STORAGE_KEY = "deerapi-gpt-image-2-settings-v1";
 const PANEL_WIDTHS_STORAGE_KEY = "deerapi-gpt-image-2-panel-widths-v1";
-const DEFAULT_API_BASE_URL = "";
 const MIN_PIXELS = 655360;
 const MAX_PIXELS = 8294400;
 const MAX_ASPECT_RATIO = 3;
@@ -77,7 +99,7 @@ function createRefreshConfig(model = initialConfig.model) {
     size: SMART_SIZE_VALUE,
     aspectRatio: SMART_ASPECT_RATIO_VALUE,
     resolution: "2K",
-    quality: "high",
+    quality: "medium",
     outputFormat: "png",
     background: "auto",
     count: 4,
@@ -118,6 +140,35 @@ function createRefreshWorkspace(model = initialConfig.model) {
     mode: "generate",
     config: createRefreshConfig(model),
   });
+}
+
+function createSubmissionWorkspace(workspace, submissionMode, submittedConfig, submittedSnapshot, sourceSnapshot, requestId, startedAt) {
+  return {
+    ...createWorkspace({
+      mode: submissionMode,
+      config: submittedConfig,
+      statusKind: "running",
+    }),
+    id: requestId,
+    mode: submissionMode,
+    imageSlots: [...workspace.imageSlots],
+    maskFile: workspace.maskFile,
+    maskOpen: workspace.maskOpen,
+    images: [],
+    error: "",
+    status: "",
+    loading: true,
+    createdAt: new Date(startedAt).toISOString(),
+    submittedAt: new Date(startedAt).toISOString(),
+    startedAt,
+    durationMs: null,
+    rateLimitUntil: 0,
+    clientRequestId: requestId,
+    historyId: requestId,
+    previewOnly: false,
+    sourceSnapshot,
+    submittedSnapshot,
+  };
 }
 
 function createLocalAsset(file, prefix, index) {
@@ -541,7 +592,7 @@ async function fileFromAsset(asset, fallbackName) {
 
 function Field({ label, children, className = "" }) {
   return (
-    <label className={`field ${className}`.trim()}>
+    <label className={cn("field", className)}>
       <span className="field-label">{label}</span>
       {children}
     </label>
@@ -550,24 +601,94 @@ function Field({ label, children, className = "" }) {
 
 function HelpTip({ text }) {
   return (
-    <span className="help-tip" role="img" tabIndex={0} aria-label={text}>
-      !
-      <span className="help-tip-bubble">{text}</span>
-    </span>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="help-tip" role="img" tabIndex={0} aria-label={text}>
+          <AlertCircleIcon aria-hidden="true" />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="right">{text}</TooltipContent>
+    </Tooltip>
   );
 }
 
 function SelectField({ label, value, onChange, options, getDisabled }) {
   return (
     <Field label={label}>
-      <select value={value} onChange={(event) => onChange(event.target.value)}>
-        {options.map((option) => (
-          <option key={option || "none"} value={option} disabled={getDisabled?.(option) || false}>
-            {option === SMART_SIZE_VALUE || option === SMART_ASPECT_RATIO_VALUE ? SMART_LABEL : option || "不指定"}
-          </option>
-        ))}
-      </select>
+      <Select value={String(value)} onValueChange={onChange}>
+        <SelectTrigger className="field-select">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectGroup>
+            {options.map((option) => (
+              <SelectItem key={option || "none"} value={String(option)} disabled={getDisabled?.(option) || false}>
+                {option === SMART_SIZE_VALUE || option === SMART_ASPECT_RATIO_VALUE ? SMART_LABEL : option || "不指定"}
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
     </Field>
+  );
+}
+
+function ProviderSettingsDialog({
+  open,
+  provider,
+  draft,
+  busy,
+  result,
+  onOpenChange,
+  onDraftChange,
+  onVerify,
+  onSave,
+}) {
+  const hasSavedKey = provider?.hasApiKey;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="provider-dialog">
+        <DialogHeader>
+          <DialogTitle>模型设置</DialogTitle>
+          <DialogDescription>填写兼容 OpenAI 的 Base URL 和 Key，用于调用 gpt-image-2。</DialogDescription>
+        </DialogHeader>
+
+        <div className="provider-form">
+          <Field label="Base URL">
+            <Input
+              value={draft.baseUrl}
+              onChange={(event) => onDraftChange({ ...draft, baseUrl: event.target.value })}
+              placeholder="https://example.com/v1"
+            />
+          </Field>
+          <Field label="Key">
+            <Input
+              type="password"
+              value={draft.apiKey}
+              onChange={(event) => onDraftChange({ ...draft, apiKey: event.target.value })}
+              placeholder={hasSavedKey ? "已保存，重新填写可替换" : "sk-..."}
+            />
+          </Field>
+          <div className="provider-status">
+            <Badge variant={hasSavedKey ? "secondary" : "outline"}>{hasSavedKey ? "已保存 Key" : "未保存 Key"}</Badge>
+            {provider?.baseUrl && <span>{provider.baseUrl}</span>}
+          </div>
+          {result?.message && (
+            <p className={cn("provider-result", result.tone === "error" && "is-error")}>{result.message}</p>
+          )}
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" type="button" disabled={busy === "verify"} onClick={onVerify}>
+            {busy === "verify" ? "验证中..." : "验证"}
+          </Button>
+          <Button type="button" disabled={busy === "save"} onClick={onSave}>
+            {busy === "save" ? "保存中..." : "保存"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -709,7 +830,15 @@ function ImageSlot({ index, file, preview, onPick, onRemove, onMove }) {
 
   return (
     <div
-      className={`image-slot ${file ? "filled" : ""} ${dragActive ? "drag-active" : ""} ${sortActive ? "sort-active" : ""} ${draggingSelf ? "dragging-self" : ""} ${suppressHover ? "suppress-hover" : ""} ${pasteActive ? "paste-active" : ""}`}
+      className={cn(
+        "image-slot",
+        file && "filled",
+        dragActive && "drag-active",
+        sortActive && "sort-active",
+        draggingSelf && "dragging-self",
+        suppressHover && "suppress-hover",
+        pasteActive && "paste-active",
+      )}
       onClick={() => inputRef.current?.click()}
       draggable={Boolean(file)}
       onDragStart={handleDragStart}
@@ -787,9 +916,9 @@ function ImageSlot({ index, file, preview, onPick, onRemove, onMove }) {
       {file && preview ? (
         <>
           <img src={preview.url} alt={`Source preview ${index + 1}`} />
-          <button className="slot-remove" type="button" onClick={handleRemove} aria-label={`删除第 ${index + 1} 张图片`}>
+          <Button className="slot-remove" variant="ghost" size="icon-sm" type="button" onClick={handleRemove} aria-label={`删除第 ${index + 1} 张图片`}>
             ×
-          </button>
+          </Button>
           <div className="slot-meta">
             <strong>#{index + 1}</strong>
             <span title={file.name}>{file.name}</span>
@@ -1023,19 +1152,26 @@ function ImageViewer({ entry, notice, onClose, onNavigate }) {
 function ImageResults({ images, outputFormat, loading, elapsedSeconds, onPreview, onCopy, onImport }) {
   if (loading) {
     return (
-      <div className="empty-state">
-        <strong>生成中</strong>
-        <span>{elapsedSeconds ? `请求进行中... ${elapsedSeconds}s` : "请求进行中..."}</span>
-      </div>
+      <Card className="empty-state" size="sm">
+        <CardHeader>
+          <CardTitle>生成中</CardTitle>
+          <CardDescription>{elapsedSeconds ? `请求进行中... ${elapsedSeconds}s` : "请求进行中..."}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Skeleton className="mx-auto h-24 w-24 rounded-lg" />
+        </CardContent>
+      </Card>
     );
   }
 
   if (!images.length) {
     return (
-      <div className="empty-state">
-        <strong>结果预览</strong>
-        <span>生成或编辑成功后，图片会显示在这里。</span>
-      </div>
+      <Card className="empty-state" size="sm">
+        <CardHeader>
+          <CardTitle>结果预览</CardTitle>
+          <CardDescription>生成或编辑成功后，图片会显示在这里。</CardDescription>
+        </CardHeader>
+      </Card>
     );
   }
 
@@ -1045,25 +1181,25 @@ function ImageResults({ images, outputFormat, loading, elapsedSeconds, onPreview
           const src = buildImageSrc(image, outputFormat);
           const alt = `Result ${image.index + 1}`;
           return (
-            <article className="result-card" key={image.index}>
+            <Card className="result-card" key={image.index} size="sm">
               <button className="result-image-button" type="button" onClick={() => onPreview?.(image)}>
                 <img src={src} alt={alt} />
               </button>
               <div className="result-actions">
                 <span>#{image.index + 1}</span>
                 <div className="result-action-buttons">
-                  <a href={src} download={`gpt-image-2-${image.index + 1}.${outputFormat}`}>
-                    下载
-                  </a>
-                  <button type="button" onClick={() => onCopy?.(image, outputFormat)}>
+                  <Button asChild variant="outline" size="sm">
+                    <a href={src} download={`gpt-image-2-${image.index + 1}.${outputFormat}`}>下载</a>
+                  </Button>
+                  <Button variant="outline" size="sm" type="button" onClick={() => onCopy?.(image, outputFormat)}>
                     复制
-                  </button>
-                  <button type="button" onClick={() => onImport?.(image, outputFormat)}>
+                  </Button>
+                  <Button variant="outline" size="sm" type="button" onClick={() => onImport?.(image, outputFormat)}>
                     导入
-                  </button>
+                  </Button>
                 </div>
               </div>
-            </article>
+            </Card>
           );
         })}
     </div>
@@ -1118,7 +1254,7 @@ function isTimeoutError(error) {
 
 function formatSubmitError(error) {
   if (isTimeoutError(error)) {
-    return "图片生成服务超时了。已把本地等待时间提高到 30 分钟；如果仍然出现，可以先降低数量、尺寸或质量后重试。";
+    return "图片生成服务超时了。已把本地等待时间提高到 60 分钟；如果仍然出现，可以先降低数量、尺寸或质量后重试。";
   }
   return error.message;
 }
@@ -1130,163 +1266,55 @@ function historyStatusLabel(status) {
   return "失败";
 }
 
-function getDeleteConfirmPosition(target) {
-  const rect = target.getBoundingClientRect();
-  const margin = 12;
-  const gap = 8;
-  const popoverWidth = Math.min(220, window.innerWidth - margin * 2);
-  const estimatedHeight = 118;
-  const placement = rect.top - estimatedHeight - gap < margin ? "below" : "above";
-  const top = placement === "below"
-    ? Math.min(window.innerHeight - estimatedHeight - margin, rect.bottom + gap)
-    : rect.top - estimatedHeight - gap;
-  const left = Math.min(
-    window.innerWidth - popoverWidth - margin,
-    Math.max(margin, rect.right - popoverWidth),
-  );
-
-  return { top, left, placement };
+function historyStatusVariant(status) {
+  if (status === "failed") return "destructive";
+  if (status === "running") return "default";
+  return "secondary";
 }
 
-function ApiSettingsDialog({ apiConfig, onClose, onSave, onTest }) {
-  const [baseUrl, setBaseUrl] = useState(apiConfig?.baseUrl || DEFAULT_API_BASE_URL);
-  const [apiKey, setApiKey] = useState("");
-  const [status, setStatus] = useState("");
-  const [statusTone, setStatusTone] = useState("info");
-  const [saving, setSaving] = useState(false);
-  const [testing, setTesting] = useState(false);
-
-  useEffect(() => {
-    setBaseUrl(apiConfig?.baseUrl || DEFAULT_API_BASE_URL);
-  }, [apiConfig?.baseUrl]);
-
-  async function handleTest() {
-    setTesting(true);
-    setStatus("");
-    try {
-      await onTest({ baseUrl, apiKey });
-      setStatus("检测通过。");
-      setStatusTone("success");
-    } catch (error) {
-      setStatus(error.message || "检测失败。");
-      setStatusTone("error");
-    } finally {
-      setTesting(false);
-    }
-  }
-
-  async function handleSubmit(event) {
-    event.preventDefault();
-    setSaving(true);
-    setStatus("");
-    try {
-      await onSave({ baseUrl, apiKey });
-      setApiKey("");
-      onClose();
-    } catch (error) {
-      setStatus(error.message || "保存失败。");
-      setStatusTone("error");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  const savedBaseUrl = (apiConfig?.baseUrl || "").trim().replace(/\/+$/, "");
-  const enteredBaseUrl = baseUrl.trim().replace(/\/+$/, "");
-  const canUseSavedKey = Boolean(apiConfig?.hasApiKey && savedBaseUrl && savedBaseUrl === enteredBaseUrl);
-
-  return (
-    <div className="settings-overlay" role="presentation" onMouseDown={(event) => {
-      if (event.target === event.currentTarget) onClose();
-    }}>
-      <form className="api-settings-dialog" onSubmit={handleSubmit}>
-        <div className="api-settings-header">
-          <div>
-            <h2>API 设置</h2>
-            <span>{apiConfig?.hasApiKey ? `当前 Key：${apiConfig.apiKeyPreview}` : "未保存 API Key"}</span>
-          </div>
-          <button type="button" onClick={onClose} aria-label="关闭 API 设置">
-            ×
-          </button>
-        </div>
-
-        <label className="field">
-          <span className="field-label">Base URL</span>
-          <input
-            type="url"
-            value={baseUrl}
-            placeholder={DEFAULT_API_BASE_URL}
-            onChange={(event) => setBaseUrl(event.target.value)}
-            required
-          />
-        </label>
-
-        <label className="field">
-          <span className="field-label">API Key</span>
-          <input
-            type="password"
-            value={apiKey}
-            placeholder={apiConfig?.hasApiKey ? "重新输入 Key 后保存覆盖" : "sk-..."}
-            autoComplete="off"
-            onChange={(event) => setApiKey(event.target.value)}
-            required
-          />
-        </label>
-
-        {status && <div className={`api-settings-status ${statusTone}`}>{status}</div>}
-
-        <div className="api-settings-actions">
-          <button className="secondary-button" type="button" onClick={handleTest} disabled={testing || saving || !baseUrl || (!apiKey && !canUseSavedKey)}>
-            {testing ? "检测中..." : "检测连接"}
-          </button>
-          <button className="submit-button" type="submit" disabled={saving || testing || !baseUrl || !apiKey}>
-            {saving ? "保存中..." : "保存"}
-          </button>
-        </div>
-      </form>
-    </div>
-  );
-}
-
-function HistoryPanel({ history, apiConfig, onOpenApiSettings, onView, onEdit, onDelete, onCancel, onPreview, onImportResult, onImportSource }) {
-  const [pendingDelete, setPendingDelete] = useState(null);
-
-  useEffect(() => {
-    if (!pendingDelete) return undefined;
-
-    function closePendingDelete(event) {
-      if (event.target.closest?.(".delete-confirm-wrap")) return;
-      if (event.target.closest?.(".delete-confirm-popover")) return;
-      setPendingDelete(null);
-    }
-
-    window.addEventListener("pointerdown", closePendingDelete);
-    return () => window.removeEventListener("pointerdown", closePendingDelete);
-  }, [pendingDelete]);
-
-  function openDeleteConfirm(item, event) {
-    setPendingDelete({
-      id: item.id,
-      item,
-      ...getDeleteConfirmPosition(event.currentTarget),
-    });
-  }
+function HistoryPanel({
+  history,
+  hasMore,
+  loadingMore,
+  total,
+  onLoadMore,
+  onView,
+  onEdit,
+  onDelete,
+  onCancel,
+  onPreview,
+  onImportResult,
+  onImportSource,
+}) {
+  const [pendingDeleteId, setPendingDeleteId] = useState(null);
+  const loadMoreRef = useRef(null);
 
   function confirmDelete(item) {
-    setPendingDelete(null);
+    setPendingDeleteId(null);
     onDelete(item);
   }
+
+  useEffect(() => {
+    if (!hasMore || !onLoadMore) return undefined;
+    const target = loadMoreRef.current;
+    if (!target) return undefined;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) onLoadMore();
+      },
+      { root: target.closest(".history-list"), rootMargin: "160px" },
+    );
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [hasMore, onLoadMore]);
 
   return (
     <aside className="history-panel">
         <div className="history-header">
           <div>
             <h2>历史记录</h2>
-            <span>{history.length} 条</span>
+            <span>{total ? `${history.length} / ${total} 条` : `${history.length} 条`}</span>
           </div>
-          <button className="history-settings-button" type="button" onClick={onOpenApiSettings}>
-            {apiConfig?.hasApiKey ? "API 已设置" : "API 设置"}
-          </button>
         </div>
 
         {!history.length && (
@@ -1298,9 +1326,11 @@ function HistoryPanel({ history, apiConfig, onOpenApiSettings, onView, onEdit, o
 
         <div className="history-list">
           {history.map((item) => (
-            <article className="history-item" key={item.id}>
+            <Card className="history-item" key={item.id} size="sm">
               <div className="history-meta">
-                <span className={`status-pill ${item.status}`}>{historyStatusLabel(item.status)}</span>
+                <Badge className="status-pill" variant={historyStatusVariant(item.status)}>
+                  {historyStatusLabel(item.status)}
+                </Badge>
                 <span>{item.mode === "generate" ? "生图" : "改图"}</span>
                 <span>{item.config?.resolvedSize || item.config?.size}</span>
                 <span>{formatDate(item.createdAt)}</span>
@@ -1315,7 +1345,7 @@ function HistoryPanel({ history, apiConfig, onOpenApiSettings, onView, onEdit, o
                     return (
                       <div className="history-thumb-wrap" key={image.index}>
                         <button className="history-thumb-button" type="button" onClick={() => onPreview(item, "result", image.index)}>
-                          <img src={src} alt={alt} />
+                          <img src={src} alt={alt} loading="lazy" />
                         </button>
                         <button
                           className="history-thumb-import"
@@ -1337,7 +1367,7 @@ function HistoryPanel({ history, apiConfig, onOpenApiSettings, onView, onEdit, o
                     return (
                       <div className="history-thumb-wrap" key={image.id || index}>
                         <button className="history-thumb-button" type="button" onClick={() => onPreview(item, "source", index)}>
-                          <img src={image.url} alt={alt} />
+                          <img src={image.url} alt={alt} loading="lazy" />
                         </button>
                         <button
                           className="history-thumb-import"
@@ -1360,54 +1390,54 @@ function HistoryPanel({ history, apiConfig, onOpenApiSettings, onView, onEdit, o
                 </div>
               )}
               <div className="history-actions">
-                <button type="button" onClick={() => onView(item)}>
+                <Button variant="outline" size="sm" type="button" onClick={() => onView(item)}>
                   查看
-                </button>
-                <button type="button" onClick={() => onEdit(item)}>
+                </Button>
+                <Button variant="outline" size="sm" type="button" onClick={() => onEdit(item)}>
                   再次编辑
-                </button>
+                </Button>
                 {item.status === "running" ? (
-                  <button type="button" onClick={() => onCancel(item)}>
+                  <Button variant="destructive" size="sm" type="button" onClick={() => onCancel(item)}>
                     取消
-                  </button>
+                  </Button>
                 ) : (
-                  <div className="delete-confirm-wrap">
-                    <button type="button" onClick={(event) => openDeleteConfirm(item, event)}>
+                  <AlertDialog open={pendingDeleteId === item.id} onOpenChange={(open) => setPendingDeleteId(open ? item.id : null)}>
+                    <Button variant="destructive" size="sm" type="button" onClick={() => setPendingDeleteId(item.id)}>
                       删除
-                    </button>
-                  </div>
+                    </Button>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>确认删除？</AlertDialogTitle>
+                        <AlertDialogDescription>这条历史记录会被移除。</AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>取消</AlertDialogCancel>
+                        <AlertDialogAction variant="destructive" onClick={() => confirmDelete(item)}>
+                          确认删除
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
                 )}
               </div>
-            </article>
+            </Card>
           ))}
+          {(hasMore || loadingMore) && (
+            <Button className="history-load-more" variant="outline" size="sm" disabled={loadingMore} onClick={onLoadMore} ref={loadMoreRef} type="button">
+              {loadingMore ? "加载中..." : "加载更多"}
+            </Button>
+          )}
         </div>
-        {pendingDelete && (
-          <div
-            className={`delete-confirm-popover ${pendingDelete.placement}`}
-            style={{ top: pendingDelete.top, left: pendingDelete.left }}
-            role="dialog"
-            aria-label="确认删除"
-          >
-            <strong>确认删除？</strong>
-            <span>这条历史记录会被移除。</span>
-            <div className="delete-confirm-actions">
-              <button type="button" onClick={() => setPendingDelete(null)}>
-                取消
-              </button>
-              <button className="danger" type="button" onClick={() => confirmDelete(pendingDelete.item)}>
-                确认删除
-              </button>
-            </div>
-          </div>
-        )}
     </aside>
   );
 }
 
 function PanelResizeHandle({ label, onResizeStart }) {
   return (
-    <button
+    <Button
       className="panel-resize-handle"
+      variant="ghost"
+      size="icon"
       type="button"
       aria-label={`调整${label}宽度`}
       onPointerDown={onResizeStart}
@@ -1430,8 +1460,10 @@ function App({ initialSettings }) {
   const [activeWorkspaceId, setActiveWorkspaceId] = useState(initialWorkspaceRef.current.id);
   const [previewWorkspaceId, setPreviewWorkspaceId] = useState(initialWorkspaceRef.current.id);
   const [history, setHistory] = useState([]);
-  const [apiConfig, setApiConfig] = useState({ baseUrl: DEFAULT_API_BASE_URL, hasApiKey: false, apiKeyPreview: "" });
-  const [apiSettingsOpen, setApiSettingsOpen] = useState(false);
+  const [historyNextCursor, setHistoryNextCursor] = useState(null);
+  const [historyHasMore, setHistoryHasMore] = useState(false);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
   const [settingsReady, setSettingsReady] = useState(savedSettingsRef.current.source !== "default");
   const [panelWidths, setPanelWidths] = useState(loadSavedPanelWidths);
   const [clockNow, setClockNow] = useState(Date.now());
@@ -1440,15 +1472,21 @@ function App({ initialSettings }) {
   const [viewerItemId, setViewerItemId] = useState(null);
   const [viewerNotice, setViewerNotice] = useState("");
   const [adHocViewerEntries, setAdHocViewerEntries] = useState(null);
-  const [resultActionMessage, setResultActionMessage] = useState("");
-  const [resultActionTone, setResultActionTone] = useState("success");
+  const [submitLockedUntil, setSubmitLockedUntil] = useState(0);
   const [imageDimensions, setImageDimensions] = useState(createEmptyImageSlots);
+  const [providerOpen, setProviderOpen] = useState(false);
+  const [provider, setProvider] = useState(() => savedSettingsRef.current.provider || { baseUrl: "", hasApiKey: false, source: "env" });
+  const [providerDraft, setProviderDraft] = useState(() => ({
+    baseUrl: savedSettingsRef.current.provider?.baseUrl || "",
+    apiKey: "",
+  }));
+  const [providerBusy, setProviderBusy] = useState("");
+  const [providerResult, setProviderResult] = useState(null);
   const activeRequestsRef = useRef(new Map());
   const canceledRequestsRef = useRef(new Set());
   const workspacesRef = useRef(workspaces);
   const [imagePreviews, setImagePreviews] = useState(createEmptyImageSlots);
   const resizeDragRef = useRef(null);
-  const toastTimerRef = useRef(null);
 
   const activeWorkspace = workspaces.find((workspace) => workspace.id === activeWorkspaceId) || workspaces[0];
   const previewWorkspace = workspaces.find((workspace) => workspace.id === previewWorkspaceId) || activeWorkspace;
@@ -1456,18 +1494,15 @@ function App({ initialSettings }) {
   const imageSlots = activeWorkspace?.imageSlots || createEmptyImageSlots();
   const imageFiles = imageSlots.filter(Boolean);
   const mode = imageFiles.length ? "edit" : "generate";
-  const maskFile = activeWorkspace?.maskFile || null;
-  const maskOpen = activeWorkspace?.maskOpen || false;
-  const loading = Boolean(activeWorkspace?.loading);
   const previewImages = previewWorkspace?.images || [];
   const previewOutputFormat = previewWorkspace?.config?.outputFormat || config.outputFormat;
   const previewLoading = Boolean(previewWorkspace?.loading);
   const previewElapsedSeconds =
     previewLoading && previewWorkspace?.startedAt ? Math.max(1, Math.floor((clockNow - previewWorkspace.startedAt) / 1000)) : 0;
-  const elapsedSeconds = loading && activeWorkspace?.startedAt ? Math.max(1, Math.floor((clockNow - activeWorkspace.startedAt) / 1000)) : 0;
   const rateLimitRemaining = activeWorkspace?.rateLimitUntil
     ? Math.max(0, Math.ceil((activeWorkspace.rateLimitUntil - clockNow) / 1000))
     : 0;
+  const submitLockRemaining = Math.max(0, submitLockedUntil - clockNow);
   const syncedHistoryKeys = new Set(
     history.flatMap((item) => [item.id, item.clientRequestId].filter(Boolean)),
   );
@@ -1513,7 +1548,10 @@ function App({ initialSettings }) {
   const viewerEntry = Number.isInteger(viewerIndex) ? activeViewerEntries[viewerIndex] : null;
   const hasRunningHistory = history.some((item) => item.status === "running");
   const hasLoadingWorkspace = workspaces.some((workspace) => workspace.loading);
-  const anyLiveTimer = workspaces.some((workspace) => workspace.loading || (workspace.rateLimitUntil && workspace.rateLimitUntil > clockNow)) || hasRunningHistory;
+  const anyLiveTimer =
+    submitLockRemaining > 0 ||
+    workspaces.some((workspace) => workspace.loading || (workspace.rateLimitUntil && workspace.rateLimitUntil > clockNow)) ||
+    hasRunningHistory;
   const workspaceStyle = {
     "--control-panel-width": `${panelWidths.control}px`,
     "--preview-panel-width": `${panelWidths.preview}px`,
@@ -1556,13 +1594,6 @@ function App({ initialSettings }) {
   }, [imageSlots]);
 
   useEffect(() => {
-    const transparentUnsupported = config.background === "transparent" && (config.model === "gpt-image-2" || config.outputFormat === "jpeg");
-    if (transparentUnsupported) {
-      updateConfig("background", "auto");
-    }
-  }, [config.background, config.model, config.outputFormat]);
-
-  useEffect(() => {
     return () => {
       activeRequestsRef.current.forEach(({ controller, timeoutId }) => {
         window.clearTimeout(timeoutId);
@@ -1574,7 +1605,7 @@ function App({ initialSettings }) {
 
   useEffect(() => {
     loadHistory();
-    loadApiConfig();
+    loadProviderSettings();
     if (savedSettingsRef.current.source === "default") {
       loadSavedSettingsFromServer();
     } else {
@@ -1628,14 +1659,22 @@ function App({ initialSettings }) {
     return () => window.clearTimeout(timer);
   }, [viewerNotice]);
 
-  useEffect(() => () => window.clearTimeout(toastTimerRef.current), []);
-
   function showToast(message, tone = "success", duration = 1800) {
     if (!message) return;
-    window.clearTimeout(toastTimerRef.current);
-    setResultActionTone(tone);
-    setResultActionMessage(message);
-    toastTimerRef.current = window.setTimeout(() => setResultActionMessage(""), duration);
+    const options = { duration };
+    if (tone === "error") {
+      toast.error(message, options);
+      return;
+    }
+    if (tone === "warning") {
+      toast.warning(message, options);
+      return;
+    }
+    if (tone === "info") {
+      toast.info(message, options);
+      return;
+    }
+    toast.success(message, options);
   }
 
   useEffect(() => {
@@ -1775,20 +1814,6 @@ function App({ initialSettings }) {
     });
   }
 
-  function setMaskFile(nextMaskFile) {
-    updateActiveWorkspace((workspace) => ({
-      ...workspace,
-      maskFile: nextMaskFile,
-    }));
-  }
-
-  function setMaskOpen(nextMaskOpen) {
-    updateActiveWorkspace((workspace) => ({
-      ...workspace,
-      maskOpen: nextMaskOpen,
-    }));
-  }
-
   function getSelectedImageFiles(workspace = activeWorkspace) {
     return (workspace?.imageSlots || []).filter(Boolean);
   }
@@ -1806,20 +1831,35 @@ function App({ initialSettings }) {
   }
 
   async function loadHistory() {
-    const response = await fetch("/api/history");
+    const response = await fetch(`/api/history?limit=${HISTORY_PAGE_SIZE}`);
     const data = await readApiJson(response);
     const items = data.items || [];
     setHistory(items);
+    setHistoryNextCursor(data.nextCursor || null);
+    setHistoryHasMore(Boolean(data.hasMore));
+    setHistoryTotal(Number(data.total || items.length));
     syncWorkspacesWithHistory(items);
     return items;
   }
 
-  async function loadApiConfig() {
+  async function loadMoreHistory() {
+    if (!historyHasMore || historyLoadingMore || !historyNextCursor) return [];
+    setHistoryLoadingMore(true);
     try {
-      const data = await requestJson("/api/api-config");
-      setApiConfig(data.apiConfig || { baseUrl: DEFAULT_API_BASE_URL, hasApiKey: false, apiKeyPreview: "" });
-    } catch {
-      setApiConfig({ baseUrl: DEFAULT_API_BASE_URL, hasApiKey: false, apiKeyPreview: "" });
+      const response = await fetch(`/api/history?limit=${HISTORY_PAGE_SIZE}&cursor=${encodeURIComponent(historyNextCursor)}`);
+      const data = await readApiJson(response);
+      const items = data.items || [];
+      setHistory((current) => {
+        const existingIds = new Set(current.map((item) => item.id));
+        return [...current, ...items.filter((item) => !existingIds.has(item.id))];
+      });
+      setHistoryNextCursor(data.nextCursor || null);
+      setHistoryHasMore(Boolean(data.hasMore));
+      setHistoryTotal(Number(data.total || historyTotal || history.length + items.length));
+      syncWorkspacesWithHistory(items);
+      return items;
+    } finally {
+      setHistoryLoadingMore(false);
     }
   }
 
@@ -1892,6 +1932,48 @@ function App({ initialSettings }) {
     );
   }
 
+  function clearDeletedHistoryLocally(deletedItem) {
+    const deletedKeys = new Set([deletedItem?.id, deletedItem?.clientRequestId].filter(Boolean));
+    if (!deletedKeys.size) return;
+
+    setWorkspaces((current) => {
+      const remaining = [];
+      current.forEach((workspace) => {
+        const workspaceKeys = [workspace.historyId, workspace.clientRequestId].filter(Boolean);
+        const matchesDeleted = workspaceKeys.some((key) => deletedKeys.has(key));
+        if (!matchesDeleted) {
+          remaining.push(workspace);
+          return;
+        }
+        cleanupSourceSnapshot(workspace.sourceSnapshot);
+        if (workspace.submittedSnapshot?.source !== workspace.sourceSnapshot) {
+          cleanupSourceSnapshot(workspace.submittedSnapshot?.source);
+        }
+        if (workspace.previewOnly) return;
+        remaining.push({
+          ...workspace,
+          images: [],
+          error: "",
+          status: "",
+          statusKind: "idle",
+          loading: false,
+          submittedAt: null,
+          startedAt: null,
+          durationMs: null,
+          clientRequestId: null,
+          historyId: null,
+          previewOnly: false,
+          rateLimitUntil: 0,
+          sourceSnapshot: null,
+          submittedSnapshot: null,
+        });
+      });
+
+      if (remaining.length) return remaining;
+      return [createRefreshWorkspace(config.model)];
+    });
+  }
+
   async function loadSavedSettingsFromServer() {
     try {
       const data = await requestJson("/api/settings");
@@ -1926,26 +2008,74 @@ function App({ initialSettings }) {
     }
   }
 
-  async function saveApiConfig(nextConfig) {
-    const data = await requestJson("/api/api-config", {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(nextConfig),
-    });
-    setApiConfig(data.apiConfig || { baseUrl: DEFAULT_API_BASE_URL, hasApiKey: false, apiKeyPreview: "" });
-    showToast("API 设置已保存。", "success");
+  async function loadProviderSettings() {
+    try {
+      const data = await requestJson("/api/provider-settings");
+      if (!data.provider) return;
+      setProvider(data.provider);
+      setProviderDraft((current) => ({
+        ...current,
+        baseUrl: current.baseUrl || data.provider.baseUrl || "",
+      }));
+    } catch {
+      // Provider settings can still be entered manually if loading fails.
+    }
   }
 
-  async function testApiConfig(nextConfig) {
-    await requestJson("/api/api-config/test", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(nextConfig),
-    });
+  async function verifyProviderSettings() {
+    if (!providerDraft.baseUrl.trim() || !providerDraft.apiKey.trim()) {
+      setProviderResult({ tone: "error", message: "请先填写 Base URL 和 Key。" });
+      return;
+    }
+    setProviderBusy("verify");
+    setProviderResult(null);
+    try {
+      await requestJson("/api/provider-settings/verify", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(providerDraft),
+      });
+      setProviderResult({ tone: "success", message: "验证通过：已找到 gpt-image-2。" });
+      showToast("验证通过：已找到 gpt-image-2。", "success");
+    } catch (error) {
+      const message = error.message || "验证失败。";
+      setProviderResult({ tone: "error", message });
+      showToast(message, "error", 2600);
+    } finally {
+      setProviderBusy("");
+    }
+  }
+
+  async function saveProviderSettings() {
+    if (!providerDraft.baseUrl.trim() || !providerDraft.apiKey.trim()) {
+      setProviderResult({ tone: "error", message: "请先填写 Base URL 和 Key。" });
+      return;
+    }
+    setProviderBusy("save");
+    setProviderResult(null);
+    try {
+      const data = await requestJson("/api/provider-settings", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(providerDraft),
+      });
+      if (data.provider) {
+        setProvider(data.provider);
+        setProviderDraft({ baseUrl: data.provider.baseUrl || providerDraft.baseUrl, apiKey: "" });
+      }
+      setProviderResult({ tone: "success", message: "已保存。后续生成会使用这组配置。" });
+      showToast("模型设置已保存。", "success");
+    } catch (error) {
+      const message = error.message || "保存失败。";
+      setProviderResult({ tone: "error", message });
+      showToast(message, "error", 2600);
+    } finally {
+      setProviderBusy("");
+    }
   }
 
   async function submitGenerate(workspaceConfig, clientRequestId, signal) {
@@ -1963,7 +2093,7 @@ function App({ initialSettings }) {
     return readApiJson(response);
   }
 
-  async function submitEdit(workspaceConfig, imageFiles, workspaceMaskFile, clientRequestId, signal) {
+  async function submitEdit(workspaceConfig, imageFiles, clientRequestId, signal) {
     if (!imageFiles.length) {
       throw new Error("请先上传至少一张原图或参考图。");
     }
@@ -1976,10 +2106,6 @@ function App({ initialSettings }) {
     imageFiles.forEach((file) => {
       formData.append("image[]", file);
     });
-    if (workspaceMaskFile) {
-      formData.set("mask", workspaceMaskFile);
-    }
-
     const response = await fetch("/api/edit", {
       method: "POST",
       signal,
@@ -1996,8 +2122,12 @@ function App({ initialSettings }) {
 
   async function handleSubmit(event) {
     event.preventDefault();
+    if (submitLockedUntil > Date.now()) return;
     const workspace = workspacesRef.current.find((item) => item.id === activeWorkspaceId);
-    if (!workspace || workspace.loading) return;
+    if (!workspace) return;
+    const lockedAt = Date.now();
+    setClockNow(lockedAt);
+    setSubmitLockedUntil(lockedAt + 1000);
 
     const imageFiles = getSelectedImageFiles(workspace);
     const submissionMode = imageFiles.length ? "edit" : "generate";
@@ -2016,50 +2146,48 @@ function App({ initialSettings }) {
     const requestId = createLocalId("request");
     const startedAt = Date.now();
     const workspaceDimensions = await Promise.all(workspace.imageSlots.map((file) => readImageDimensions(file).catch(() => null)));
-    const workspaceConfig = resolveConfigForSubmission(workspace.config, submissionMode, workspaceDimensions);
-    const sourceSnapshot = submissionMode === "edit" ? createLocalSourceSnapshot(imageFiles, workspace.maskFile) : null;
-    const submittedConfig = {
+    const baseConfig = {
       ...workspace.config,
+      outputFormat: "png",
+      background: "auto",
+    };
+    const workspaceConfig = resolveConfigForSubmission(baseConfig, submissionMode, workspaceDimensions);
+    const sourceSnapshot = submissionMode === "edit" ? createLocalSourceSnapshot(imageFiles, null) : null;
+    const submittedConfig = {
+      ...baseConfig,
       resolvedSize: getResolvedSize(workspaceConfig, submissionMode),
     };
     const submittedSnapshot = {
       mode: submissionMode,
       config: submittedConfig,
       imageSlots: [...workspace.imageSlots],
-      maskFile: workspace.maskFile,
-      maskOpen: workspace.maskOpen,
+      maskFile: null,
+      maskOpen: false,
       source: sourceSnapshot,
     };
-
-    cleanupSourceSnapshot(workspace.sourceSnapshot);
-    activeRequestsRef.current.set(workspace.id, { controller, timeoutId, requestId });
-    setClockNow(startedAt);
-    setPreviewWorkspaceId(workspace.id);
-    updateWorkspace(workspace.id, {
-      loading: true,
-      mode: submissionMode,
-      statusKind: "running",
-      error: "",
-      status: "",
-      images: [],
-      startedAt,
-      submittedAt: new Date(startedAt).toISOString(),
-      durationMs: null,
-      rateLimitUntil: 0,
-      clientRequestId: requestId,
-      historyId: requestId,
-      sourceSnapshot,
+    const submissionWorkspace = createSubmissionWorkspace(
+      workspace,
+      submissionMode,
+      submittedConfig,
       submittedSnapshot,
-    });
+      sourceSnapshot,
+      requestId,
+      startedAt,
+    );
+
+    activeRequestsRef.current.set(submissionWorkspace.id, { controller, timeoutId, requestId });
+    setWorkspaces((current) => [submissionWorkspace, ...current]);
+    setClockNow(startedAt);
+    setPreviewWorkspaceId(submissionWorkspace.id);
     showToast("请求进行中。", "info", 2200);
 
     try {
       const data =
         submissionMode === "generate"
           ? await submitGenerate(workspaceConfig, requestId, controller.signal)
-          : await submitEdit(workspaceConfig, imageFiles, workspace.maskFile, requestId, controller.signal);
+          : await submitEdit(workspaceConfig, imageFiles, requestId, controller.signal);
       let shouldCleanupSourceSnapshot = true;
-      updateWorkspace(workspace.id, (current) => {
+      updateWorkspace(submissionWorkspace.id, (current) => {
         if (current.statusKind === "canceled") {
           shouldCleanupSourceSnapshot = false;
           return current;
@@ -2082,7 +2210,7 @@ function App({ initialSettings }) {
       showToast(`完成：收到 ${data.images?.length || 0} 张图片。`, "success");
       await loadHistory();
     } catch (submitError) {
-      const latestWorkspace = workspacesRef.current.find((item) => item.id === workspace.id);
+      const latestWorkspace = workspacesRef.current.find((item) => item.id === submissionWorkspace.id);
       if (
         submitError.name === "AbortError" &&
         (canceledRequestsRef.current.has(requestId) || latestWorkspace?.statusKind === "canceled")
@@ -2092,11 +2220,11 @@ function App({ initialSettings }) {
 
       if (submitError.name === "AbortError") {
         cleanupSourceSnapshot(sourceSnapshot);
-        showToast(didTimeout ? "请求超过 30 分钟，已自动停止。可以降低尺寸/质量后重试。" : "已取消", didTimeout ? "error" : "warning", didTimeout ? 2600 : 1800);
-        updateWorkspace(workspace.id, {
+        showToast(didTimeout ? "请求超过 60 分钟，已自动停止。可以降低尺寸/质量后重试。" : "已取消", didTimeout ? "error" : "warning", didTimeout ? 2600 : 1800);
+        updateWorkspace(submissionWorkspace.id, {
           loading: false,
           statusKind: didTimeout ? "failed" : "canceled",
-          error: didTimeout ? "请求超过 30 分钟，已自动停止。可以降低尺寸/质量后重试。" : "",
+          error: didTimeout ? "请求超过 60 分钟，已自动停止。可以降低尺寸/质量后重试。" : "",
           status: didTimeout ? "" : "已取消",
           images: [],
           durationMs: Date.now() - startedAt,
@@ -2107,7 +2235,7 @@ function App({ initialSettings }) {
         const retryAfter = Number.isFinite(submitError.retryAfter) && submitError.retryAfter > 0 ? submitError.retryAfter : 60;
         cleanupSourceSnapshot(sourceSnapshot);
         showToast(`触发上游限流，请等待 ${retryAfter}s 后再试。`, "warning", 2600);
-        updateWorkspace(workspace.id, {
+        updateWorkspace(submissionWorkspace.id, {
           loading: false,
           statusKind: "failed",
           error: `触发上游限流，请等待 ${retryAfter}s 后再试。可以先降低数量、尺寸或质量。`,
@@ -2122,7 +2250,7 @@ function App({ initialSettings }) {
       } else {
         cleanupSourceSnapshot(sourceSnapshot);
         showToast(formatSubmitError(submitError), "error", 2600);
-        updateWorkspace(workspace.id, {
+        updateWorkspace(submissionWorkspace.id, {
           loading: false,
           statusKind: "failed",
           error: formatSubmitError(submitError),
@@ -2136,7 +2264,7 @@ function App({ initialSettings }) {
       }
     } finally {
       window.clearTimeout(timeoutId);
-      activeRequestsRef.current.delete(workspace.id);
+      activeRequestsRef.current.delete(submissionWorkspace.id);
       canceledRequestsRef.current.delete(requestId);
       await loadHistory().catch(() => {});
     }
@@ -2344,35 +2472,12 @@ function App({ initialSettings }) {
   }
 
   async function loadHistoryItem(item) {
-    if (item.local) {
-      const workspaceId = item.workspaceId || item.id;
-      const localWorkspace = workspacesRef.current.find((workspace) => workspace.id === workspaceId);
-      if (!localWorkspace) return;
-      const snapshot = localWorkspace.submittedSnapshot;
-      updateWorkspace(workspaceId, (workspace) => ({
-        ...workspace,
-        mode: snapshot?.mode || workspace.mode,
-        config: {
-          ...initialConfig,
-          ...(snapshot?.config || workspace.config),
-        },
-        imageSlots: snapshot?.imageSlots ? [...snapshot.imageSlots] : workspace.imageSlots,
-        maskFile: snapshot?.maskFile || null,
-        maskOpen: Boolean(snapshot?.maskFile || snapshot?.maskOpen),
-        status: workspace.statusKind === "success" ? workspace.status : "",
-      }));
-      setActiveWorkspaceId(workspaceId);
-      setPreviewWorkspaceId(workspaceId);
-      return;
-    }
-
     const active = workspacesRef.current.find((workspace) => workspace.id === activeWorkspaceId);
-    const existingWorkspace = workspacesRef.current.find(
-      (workspace) => !workspace.previewOnly && workspaceMatchesHistoryItem(workspace, item),
-    );
-    let targetId = existingWorkspace?.id || active?.id;
-    let targetBeforeLoad = active;
-    if (!existingWorkspace && (!active || active.loading)) {
+    const reusableActive = active && !active.loading && !active.previewOnly;
+    let targetId = reusableActive ? active.id : null;
+    const targetBeforeLoad = reusableActive ? active : null;
+
+    if (!targetId) {
       const workspace = createWorkspace({
         mode: item.mode || "generate",
         config: {
@@ -2381,16 +2486,47 @@ function App({ initialSettings }) {
         },
       });
       targetId = workspace.id;
-      targetBeforeLoad = null;
       setWorkspaces((current) => [workspace, ...current]);
-      setActiveWorkspaceId(targetId);
-      setPreviewWorkspaceId(targetId);
-    } else if (existingWorkspace) {
-      targetBeforeLoad = existingWorkspace;
     }
 
-    const isRunning = item.status === "running";
-    const startedAt = getHistoryStartedMs(item) || Date.now();
+    cleanupSourceSnapshot(targetBeforeLoad?.sourceSnapshot);
+
+    if (item.local) {
+      const workspaceId = item.workspaceId || item.id;
+      const localWorkspace = workspacesRef.current.find((workspace) => workspace.id === workspaceId);
+      if (!localWorkspace) return;
+      const snapshot = localWorkspace.submittedSnapshot;
+      const nextSlots = snapshot?.imageSlots ? [...snapshot.imageSlots] : [...localWorkspace.imageSlots];
+      updateWorkspace(targetId, (workspace) => ({
+        ...workspace,
+        mode: nextSlots.some(Boolean) ? "edit" : "generate",
+        config: {
+          ...initialConfig,
+          ...(snapshot?.config || item.config || localWorkspace.config),
+        },
+        imageSlots: nextSlots,
+        maskFile: snapshot?.maskFile || null,
+        maskOpen: Boolean(snapshot?.maskFile || snapshot?.maskOpen),
+        images: [],
+        error: "",
+        status: "",
+        statusKind: "idle",
+        loading: false,
+        submittedAt: null,
+        startedAt: null,
+        durationMs: null,
+        clientRequestId: null,
+        historyId: null,
+        previewOnly: false,
+        rateLimitUntil: 0,
+        sourceSnapshot: null,
+        submittedSnapshot: null,
+      }));
+      setActiveWorkspaceId(targetId);
+      setPreviewWorkspaceId(targetId);
+      return;
+    }
+
     updateWorkspace(targetId, {
       mode: item.mode || "generate",
       config: {
@@ -2400,19 +2536,18 @@ function App({ initialSettings }) {
       images: item.status === "success" ? item.images || [] : [],
       error: "",
       status: "",
-      statusKind: item.status || "failed",
-      loading: isRunning,
-      submittedAt: item.startedAt || item.createdAt || null,
-      startedAt: isRunning ? startedAt : null,
-      durationMs: isRunning ? null : item.durationMs ?? null,
-      clientRequestId: item.clientRequestId || item.id,
-      historyId: item.id,
+      statusKind: "idle",
+      loading: false,
+      submittedAt: null,
+      startedAt: null,
+      durationMs: null,
+      clientRequestId: null,
+      historyId: null,
       previewOnly: false,
       rateLimitUntil: 0,
       sourceSnapshot: null,
       submittedSnapshot: null,
     });
-    cleanupSourceSnapshot(targetBeforeLoad?.sourceSnapshot);
 
     if ((item.source?.images || []).length) {
       try {
@@ -2450,7 +2585,6 @@ function App({ initialSettings }) {
     }
 
     updateWorkspace(targetId, (workspace) => {
-      const statusKind = workspace.statusKind || item.status || "failed";
       return {
         ...workspace,
         error: isRateLimitError(item.error)
@@ -2458,7 +2592,7 @@ function App({ initialSettings }) {
           : item.error?.message
             ? formatSubmitError(item.error)
             : "",
-        status: statusKind === "success" ? workspace.status : "",
+        status: "",
       };
     });
     setActiveWorkspaceId(targetId);
@@ -2494,35 +2628,75 @@ function App({ initialSettings }) {
 
     const response = await fetch(`/api/history/${item.id}`, { method: "DELETE" });
     await readApiJson(response);
-    await loadHistory();
-    if ([previewWorkspace?.historyId, previewWorkspace?.clientRequestId].filter(Boolean).includes(item.id)) {
+    const deletedKeys = new Set([item.id, item.clientRequestId].filter(Boolean));
+    setHistory((current) =>
+      current.filter((historyItem) => ![historyItem.id, historyItem.clientRequestId].filter(Boolean).some((key) => deletedKeys.has(key))),
+    );
+    setHistoryTotal((current) => Math.max(0, current - 1));
+    clearDeletedHistoryLocally(item);
+    if ([previewWorkspace?.historyId, previewWorkspace?.clientRequestId].filter(Boolean).some((key) => deletedKeys.has(key))) {
       setPreviewWorkspaceId(activeWorkspaceId);
     }
+    if (viewerItemId && deletedKeys.has(viewerItemId)) {
+      setViewerIndex(null);
+      setAdHocViewerEntries(null);
+      setViewerMode(null);
+      setViewerItemId(null);
+      setViewerNotice("");
+    }
+    await loadHistory().catch(() => {});
   }
 
   const resolvedSize = getResolvedSize(config, mode, imageDimensions);
 
   return (
-    <main className="app-shell">
+    <TooltipProvider>
+      <Toaster position="top-center" />
+      <main className="app-shell dark">
+      <Button
+        className="provider-settings-button"
+        variant="outline"
+        size="icon"
+        type="button"
+        aria-label="模型设置"
+        onClick={() => {
+          setProviderResult(null);
+          setProviderDraft((current) => ({
+            ...current,
+            baseUrl: current.baseUrl || provider.baseUrl || "",
+          }));
+          setProviderOpen(true);
+        }}
+      >
+        <SettingsIcon />
+      </Button>
       <form className="workspace" style={workspaceStyle} onSubmit={handleSubmit}>
-        {resultActionMessage && <div className={`toast-message ${resultActionTone}`}>{resultActionMessage}</div>}
         <section className="control-panel resizable-panel">
           <div className="control-scroll">
             <div className="field prompt-field">
               <div className="prompt-heading">
                 <span className="field-label">Prompt</span>
-                <button className="reset-button" type="button" onClick={createNewWorkspace}>
+                <Button variant="outline" size="sm" type="button" onClick={createNewWorkspace}>
                   新建
-                </button>
+                </Button>
               </div>
-              <textarea value={config.prompt} onChange={(event) => updateConfig("prompt", event.target.value)} rows={2} />
+              <Textarea
+                value={config.prompt}
+                onChange={(event) => updateConfig("prompt", event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter" || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey || event.nativeEvent?.isComposing) return;
+                  event.preventDefault();
+                  event.currentTarget.form?.requestSubmit();
+                }}
+                rows={2}
+              />
             </div>
 
             <div className="upload-grid">
               <div className="upload-header">
                 <div>
                   <strong>原图 / 参考图</strong>
-                  <span>可选；有参考图自动改图，没有参考图自动生图。最多 {MAX_EDIT_IMAGES} 张，mask 作用于第 1 张。</span>
+                  <span>可选；有参考图自动改图，没有参考图自动生图。最多 {MAX_EDIT_IMAGES} 张。</span>
                 </div>
               </div>
               <div className="image-slot-grid">
@@ -2538,36 +2712,25 @@ function App({ initialSettings }) {
                   />
                 ))}
               </div>
-
-              <details className="mask-panel" open={maskOpen} onToggle={(event) => setMaskOpen(event.currentTarget.open)}>
-                <summary>
-                  <span>Mask（可选）</span>
-                  {maskFile ? <small>{maskFile.name}</small> : <small>默认收起</small>}
-                </summary>
-                <Field label="上传 Mask（作用于第 1 张）">
-                  <input accept="image/png,image/jpeg,image/webp" type="file" onChange={(event) => setMaskFile(event.target.files?.[0] || null)} />
-                </Field>
-                {maskFile && (
-                  <button className="secondary-button" type="button" onClick={() => setMaskFile(null)}>
-                    清除 Mask
-                  </button>
-                )}
-              </details>
             </div>
 
             <Field label="尺寸控制">
-              <div className="segmented-control">
+              <ToggleGroup
+                className="segmented-control"
+                type="single"
+                value={config.sizeMode}
+                onValueChange={(value) => {
+                  if (value) updateConfig("sizeMode", value);
+                }}
+                variant="outline"
+                spacing={0}
+              >
                 {sizeModeOptions.map((option) => (
-                  <button
-                    className={config.sizeMode === option.value ? "active" : ""}
-                    key={option.value}
-                    type="button"
-                    onClick={() => updateConfig("sizeMode", option.value)}
-                  >
+                  <ToggleGroupItem className="segmented-item" key={option.value} value={option.value}>
                     {option.label}
-                  </button>
+                  </ToggleGroupItem>
                 ))}
-              </div>
+              </ToggleGroup>
             </Field>
 
             {config.sizeMode === "preset" ? (
@@ -2589,16 +2752,8 @@ function App({ initialSettings }) {
               </div>
             )}
 
-            <div className="field-grid four">
+            <div className="field-grid two">
               <SelectField label="质量" value={config.quality} onChange={(value) => updateConfig("quality", value)} options={qualityOptions} />
-              <SelectField label="格式" value={config.outputFormat} onChange={(value) => updateConfig("outputFormat", value)} options={outputOptions} />
-              <SelectField
-                label="背景"
-                value={config.background}
-                onChange={(value) => updateConfig("background", value)}
-                options={backgroundOptions}
-                getDisabled={(option) => option === "transparent" && (config.model === "gpt-image-2" || config.outputFormat === "jpeg")}
-              />
               <SelectField label="数量" value={String(config.count)} onChange={(value) => updateConfig("count", Number(value))} options={countOptions.map(String)} />
             </div>
 
@@ -2607,22 +2762,11 @@ function App({ initialSettings }) {
           <div className="submit-row sticky-submit">
             <div className="submit-meta">
               <strong>{mode === "generate" ? "生图" : "改图"}</strong>
-              <span>{resolvedSize} · {config.quality} · {config.outputFormat}</span>
+              <span>{resolvedSize} · {config.quality}</span>
             </div>
-            <button className="submit-button" type="submit" disabled={loading || rateLimitRemaining > 0}>
-              {loading
-                ? `请求中... ${elapsedSeconds}s`
-                : rateLimitRemaining > 0
-                  ? `限流等待 ${rateLimitRemaining}s`
-                  : mode === "generate"
-                    ? "生成图片"
-                    : "编辑图片"}
-            </button>
-            {loading && (
-              <button className="cancel-button" type="button" onClick={() => cancelRequest(activeWorkspaceId)}>
-                取消
-              </button>
-            )}
+            <Button className="submit-button" size="lg" type="submit" disabled={rateLimitRemaining > 0 || submitLockRemaining > 0}>
+              {rateLimitRemaining > 0 ? `限流等待 ${rateLimitRemaining}s` : "生成图片"}
+            </Button>
           </div>
           <PanelResizeHandle label="参数区" onResizeStart={(event) => startPanelResize("control", event)} />
         </section>
@@ -2643,8 +2787,10 @@ function App({ initialSettings }) {
         <div className="history-panel-shell resizable-panel">
           <HistoryPanel
             history={visibleHistory}
-            apiConfig={apiConfig}
-            onOpenApiSettings={() => setApiSettingsOpen(true)}
+            hasMore={historyHasMore}
+            loadingMore={historyLoadingMore}
+            total={historyTotal + localProcessHistory.length}
+            onLoadMore={loadMoreHistory}
             onView={previewHistoryItem}
             onEdit={loadHistoryItem}
             onDelete={deleteHistoryItem}
@@ -2656,14 +2802,6 @@ function App({ initialSettings }) {
           <PanelResizeHandle label="历史记录" onResizeStart={(event) => startPanelResize("history", event)} />
         </div>
       </form>
-      {apiSettingsOpen && (
-        <ApiSettingsDialog
-          apiConfig={apiConfig}
-          onClose={() => setApiSettingsOpen(false)}
-          onSave={saveApiConfig}
-          onTest={testApiConfig}
-        />
-      )}
       {viewerEntry && (
         <ImageViewer
           entry={viewerEntry}
@@ -2678,7 +2816,19 @@ function App({ initialSettings }) {
           onNavigate={navigateViewer}
         />
       )}
-    </main>
+      <ProviderSettingsDialog
+        open={providerOpen}
+        provider={provider}
+        draft={providerDraft}
+        busy={providerBusy}
+        result={providerResult}
+        onOpenChange={setProviderOpen}
+        onDraftChange={setProviderDraft}
+        onVerify={verifyProviderSettings}
+        onSave={saveProviderSettings}
+      />
+      </main>
+    </TooltipProvider>
   );
 }
 
@@ -2694,12 +2844,25 @@ async function bootstrap() {
             ...initialConfig,
             ...data.settings.config,
           },
+          provider: data.settings.provider,
           source: "server",
         };
       }
     } catch {
       // Fall back to defaults when saved settings are unavailable.
     }
+  }
+
+  try {
+    const data = await requestJson("/api/provider-settings");
+    if (data.provider) {
+      initialSettings = {
+        ...initialSettings,
+        provider: data.provider,
+      };
+    }
+  } catch {
+    // Provider settings can be loaded after render.
   }
 
   createRoot(document.getElementById("root")).render(<App initialSettings={initialSettings} />);
