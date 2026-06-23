@@ -2,6 +2,8 @@
 
 一个面向 `gpt-image-2` / OpenAI 兼容图片接口的本地 Web 应用。支持无参考图生图、有参考图自动改图、历史记录、图片预览、再次编辑、复制、下载和导入。
 
+![Image2 Generation App screenshot](docs/screenshot.png)
+
 ## Features
 
 - 自动路由：有参考图时走图片编辑接口，没有参考图时走图片生成接口。
