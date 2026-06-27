@@ -28,26 +28,26 @@ npm install
 ## Run
 
 ```bash
-npm run dev
+NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1 npm run dev
 ```
 
 默认地址：
 
-- Frontend: `http://localhost:5173`
-- API server: `http://localhost:8787`
+- Frontend: `http://localhost:43288`
+- API server: `http://localhost:43287`
 
 开发模式下，Vite 会把 `/api` 请求代理到后端服务。
 
-如果本机 `8787` 已被其他项目占用，可以指定端口运行：
+如果本机 `43287` 已被其他项目占用，可以指定端口运行：
 
 ```bash
-PORT=18787 npm run dev:server
+PORT=43297 npm run dev:server
 ```
 
 另开一个终端：
 
 ```bash
-VITE_API_PROXY_TARGET=http://localhost:18787 npm run dev:client -- --host 0.0.0.0 --port 5173
+VITE_API_PROXY_TARGET=http://localhost:43297 npm run dev:client -- --host 0.0.0.0 --port 43288
 ```
 
 ## API Settings
@@ -67,7 +67,7 @@ VITE_API_PROXY_TARGET=http://localhost:18787 npm run dev:client -- --host 0.0.0.
 IMAGE_API_BASE_URL=https://your-provider.example.com/v1
 IMAGE_API_KEY=sk-your-key-here
 IMAGE_API_TIMEOUT_MS=3600000
-PORT=8787
+PORT=43287
 ```
 
 兼容别名：

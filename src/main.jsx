@@ -544,6 +544,7 @@ async function convertBlobToPng(blob) {
 
 function getHistoryResultEntries(item) {
   const outputFormat = item.config?.outputFormat || "png";
+  const total = item.images?.length || 0;
   return (item.images || [])
     .map((image, index) => {
       const imageIndex = Number.isFinite(image.index) ? image.index : index;
@@ -552,7 +553,10 @@ function getHistoryResultEntries(item) {
         item,
         itemId: item.id,
         kind: "result",
+        image,
+        outputFormat,
         imageIndex,
+        total,
         src: buildImageSrc(image, outputFormat),
         alt: `生成结果 ${imageIndex + 1}`,
       };
@@ -561,13 +565,17 @@ function getHistoryResultEntries(item) {
 }
 
 function getHistorySourceEntries(item) {
+  const total = item.source?.images?.length || 0;
   return (item.source?.images || [])
     .map((image, index) => ({
     key: `${item.id}:source:${image.id || index}`,
     item,
     itemId: item.id,
     kind: "source",
+    image,
+    outputFormat: "png",
     imageIndex: index,
+    total,
     src: image.url,
     alt: `参考图 ${index + 1}`,
     }))
@@ -938,7 +946,7 @@ function ImageSlot({ index, file, preview, onPick, onRemove, onMove }) {
   );
 }
 
-function ImageViewer({ entry, notice, onClose, onNavigate }) {
+function ImageViewer({ entry, notice, positionLabel, onClose, onNavigate, onCopy, onImport }) {
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [pointerDown, setPointerDown] = useState(false);
@@ -1128,23 +1136,46 @@ function ImageViewer({ entry, notice, onClose, onNavigate }) {
     onClose();
   }
 
+  const downloadExtension = entry?.outputFormat === "jpeg" ? "jpg" : entry?.outputFormat || "png";
+  const canUseResultActions = entry?.kind === "result" && entry?.image;
+
   return (
     <div className="image-viewer" onClick={handleViewerClick} onWheel={handleWheel}>
       {notice && <div className="image-viewer-notice">{notice}</div>}
-      <img
-        ref={imageRef}
-        className={`image-viewer-img ${pointerDown ? "is-pressing" : ""} ${panning ? "is-panning" : ""}`}
-        src={entry?.src}
-        alt={entry?.alt}
-        draggable="false"
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={finishPointer}
-        onPointerCancel={cancelPointer}
+      <div className="image-viewer-toolbar" onClick={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
+        {positionLabel && <span className="image-viewer-counter">{positionLabel}</span>}
+        {canUseResultActions && (
+          <div className="image-viewer-actions">
+            <a href={entry.src} download={`gpt-image-2-${entry.imageIndex + 1}.${downloadExtension}`}>
+              下载
+            </a>
+            <button type="button" onClick={() => onCopy?.(entry.image, entry.outputFormat)}>
+              复制
+            </button>
+            <button type="button" onClick={() => onImport?.(entry.image, entry.outputFormat)}>
+              导入
+            </button>
+          </div>
+        )}
+      </div>
+      <div
+        className="image-viewer-frame"
         style={{
           transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
         }}
-      />
+      >
+        <img
+          ref={imageRef}
+          className={`image-viewer-img ${pointerDown ? "is-pressing" : ""} ${panning ? "is-panning" : ""}`}
+          src={entry?.src}
+          alt={entry?.alt}
+          draggable="false"
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={finishPointer}
+          onPointerCancel={cancelPointer}
+        />
+      </div>
     </div>
   );
 }
@@ -1274,6 +1305,7 @@ function historyStatusVariant(status) {
 
 function HistoryPanel({
   history,
+  error,
   hasMore,
   loadingMore,
   total,
@@ -1317,7 +1349,14 @@ function HistoryPanel({
           </div>
         </div>
 
-        {!history.length && (
+        {error && (
+          <div className="history-empty history-empty-error">
+            <strong>历史加载失败</strong>
+            <span>{error}</span>
+          </div>
+        )}
+
+        {!error && !history.length && (
           <div className="history-empty">
             <strong>暂无记录</strong>
             <span>生成、改图、失败请求都会保存在这里。</span>
@@ -1463,6 +1502,7 @@ function App({ initialSettings }) {
   const [historyNextCursor, setHistoryNextCursor] = useState(null);
   const [historyHasMore, setHistoryHasMore] = useState(false);
   const [historyTotal, setHistoryTotal] = useState(0);
+  const [historyError, setHistoryError] = useState("");
   const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
   const [settingsReady, setSettingsReady] = useState(savedSettingsRef.current.source !== "default");
   const [panelWidths, setPanelWidths] = useState(loadSavedPanelWidths);
@@ -1546,6 +1586,8 @@ function App({ initialSettings }) {
   const sourceViewerEntries = sourceViewerItem ? getHistorySourceEntries(sourceViewerItem) : [];
   const activeViewerEntries = adHocViewerEntries || (viewerMode === "source" ? sourceViewerEntries : resultViewerEntries);
   const viewerEntry = Number.isInteger(viewerIndex) ? activeViewerEntries[viewerIndex] : null;
+  const viewerPositionLabel =
+    viewerEntry && viewerEntry.total ? `${viewerEntry.imageIndex + 1}/${viewerEntry.total}` : "";
   const hasRunningHistory = history.some((item) => item.status === "running");
   const hasLoadingWorkspace = workspaces.some((workspace) => workspace.loading);
   const anyLiveTimer =
@@ -1604,7 +1646,9 @@ function App({ initialSettings }) {
   }, []);
 
   useEffect(() => {
-    loadHistory();
+    loadHistory().catch((error) => {
+      setHistoryError(error.message || "历史接口请求失败。");
+    });
     loadProviderSettings();
     if (savedSettingsRef.current.source === "default") {
       loadSavedSettingsFromServer();
@@ -1834,6 +1878,7 @@ function App({ initialSettings }) {
     const response = await fetch(`/api/history?limit=${HISTORY_PAGE_SIZE}`);
     const data = await readApiJson(response);
     const items = data.items || [];
+    setHistoryError("");
     setHistory(items);
     setHistoryNextCursor(data.nextCursor || null);
     setHistoryHasMore(Boolean(data.hasMore));
@@ -1849,6 +1894,7 @@ function App({ initialSettings }) {
       const response = await fetch(`/api/history?limit=${HISTORY_PAGE_SIZE}&cursor=${encodeURIComponent(historyNextCursor)}`);
       const data = await readApiJson(response);
       const items = data.items || [];
+      setHistoryError("");
       setHistory((current) => {
         const existingIds = new Set(current.map((item) => item.id));
         return [...current, ...items.filter((item) => !existingIds.has(item.id))];
@@ -1858,6 +1904,9 @@ function App({ initialSettings }) {
       setHistoryTotal(Number(data.total || historyTotal || history.length + items.length));
       syncWorkspacesWithHistory(items);
       return items;
+    } catch (error) {
+      setHistoryError(error.message || "历史接口请求失败。");
+      throw error;
     } finally {
       setHistoryLoadingMore(false);
     }
@@ -2787,6 +2836,7 @@ function App({ initialSettings }) {
         <div className="history-panel-shell resizable-panel">
           <HistoryPanel
             history={visibleHistory}
+            error={historyError}
             hasMore={historyHasMore}
             loadingMore={historyLoadingMore}
             total={historyTotal + localProcessHistory.length}
@@ -2806,6 +2856,9 @@ function App({ initialSettings }) {
         <ImageViewer
           entry={viewerEntry}
           notice={viewerNotice}
+          positionLabel={viewerPositionLabel}
+          onCopy={copyResultImage}
+          onImport={importResultImage}
           onClose={() => {
             setViewerIndex(null);
             setAdHocViewerEntries(null);

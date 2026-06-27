@@ -15,7 +15,7 @@ const upload = multer({
   },
 });
 
-const PORT = Number(process.env.PORT || 8787);
+const PORT = Number(process.env.PORT || 43287);
 const IMAGE_API_BASE_URL = (
   process.env.IMAGE_API_BASE_URL ||
   process.env.LLM_API_BASE_URL ||

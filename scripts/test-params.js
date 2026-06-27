@@ -1,6 +1,6 @@
 import "../server/env.js";
 
-const port = Number(process.env.PORT || 8787);
+const port = Number(process.env.PORT || 43287);
 const expected = {
   format: "jpeg",
   width: 1024,
