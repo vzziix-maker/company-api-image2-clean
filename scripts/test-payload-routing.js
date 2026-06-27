@@ -237,6 +237,9 @@ try {
           quality: item.config?.quality,
           background: item.config?.background,
           resolvedSize: item.config?.resolvedSize,
+          sizeMode: item.config?.sizeMode,
+          size: item.config?.size,
+          aspectRatio: item.config?.aspectRatio,
         },
       ];
     }),
@@ -264,8 +267,10 @@ try {
     (editPayload?.["image[]"] || []).length === 2 &&
     smartRatioResponse.status === 200 &&
     smartRatioPayload?.size === "2048x1360" &&
+    historyById[smartRatioData.historyId]?.aspectRatio === "smart" &&
     smartPresetResponse.status === 200 &&
     smartPresetPayload?.size === "1232x992" &&
+    historyById[smartPresetData.historyId]?.size === "smart" &&
     Object.values(historyById).every((item) => item?.count === item?.requestN && item?.images === item?.count);
 
   console.log(

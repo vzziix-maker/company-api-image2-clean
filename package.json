@@ -14,6 +14,9 @@
     "test:payload-routing": "node scripts/test-payload-routing.js",
     "test:history-pagination": "node scripts/test-history-pagination.js",
     "test:persistent-history": "node scripts/test-persistent-history.js",
+    "test:history-config": "node scripts/test-history-config.js",
+    "test:notifications": "node scripts/test-notification-reminders.js",
+    "test:reference-draft": "node scripts/test-reference-image-draft-storage.js",
     "test:rate-limit": "node scripts/test-rate-limit.js"
   },
   "dependencies": {

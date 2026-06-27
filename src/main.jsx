@@ -24,6 +24,19 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import {
+  ATTENTION_DOCUMENT_TITLE,
+  ATTENTION_DOCUMENT_TITLE_FRAMES,
+  createCompletionReminderBatch,
+  DEFAULT_DOCUMENT_TITLE,
+  EMPTY_ATTENTION_DOCUMENT_TITLE,
+  pageNeedsAttention,
+  requestBrowserNotificationPermission,
+  sendBrowserCompletionNotification,
+  updateCompletionReminderBatch,
+} from "./notification-reminders.js";
+import { createApiSubmissionConfig, restoreSmartConfigFromReference } from "./history-config.js";
+import { loadReferenceImageDraft, saveReferenceImageDraft } from "./reference-image-draft-storage.js";
 import "./styles.css";
 
 const SMART_SIZE_VALUE = "smart";
@@ -755,7 +768,7 @@ function ImageSlot({ index, file, preview, onPick, onRemove, onMove }) {
     setPasteActive(false);
     hoverSuppressTimerRef.current = window.setTimeout(() => {
       setSuppressHover(false);
-    }, 220);
+    }, 110);
   }
 
   function createDragGhost(slotElement, event) {
@@ -1386,14 +1399,16 @@ function HistoryPanel({
                         <button className="history-thumb-button" type="button" onClick={() => onPreview(item, "result", image.index)}>
                           <img src={src} alt={alt} loading="lazy" />
                         </button>
-                        <button
+                        <Button
                           className="history-thumb-import"
+                          variant="outline"
+                          size="xs"
                           type="button"
                           aria-label={`导入历史结果 ${image.index + 1}`}
                           onClick={() => onImportResult(image, item.config?.outputFormat || "png")}
                         >
                           导入
-                        </button>
+                        </Button>
                       </div>
                     );
                   })}
@@ -1408,14 +1423,16 @@ function HistoryPanel({
                         <button className="history-thumb-button" type="button" onClick={() => onPreview(item, "source", index)}>
                           <img src={image.url} alt={alt} loading="lazy" />
                         </button>
-                        <button
+                        <Button
                           className="history-thumb-import"
+                          variant="outline"
+                          size="xs"
                           type="button"
                           aria-label={`导入历史参考图 ${index + 1}`}
                           onClick={() => onImportSource(image, index)}
                         >
                           导入
-                        </button>
+                        </Button>
                       </div>
                     );
                   })}
@@ -1436,12 +1453,12 @@ function HistoryPanel({
                   再次编辑
                 </Button>
                 {item.status === "running" ? (
-                  <Button variant="destructive" size="sm" type="button" onClick={() => onCancel(item)}>
+                  <Button variant="outline" size="sm" type="button" onClick={() => onCancel(item)}>
                     取消
                   </Button>
                 ) : (
                   <AlertDialog open={pendingDeleteId === item.id} onOpenChange={(open) => setPendingDeleteId(open ? item.id : null)}>
-                    <Button variant="destructive" size="sm" type="button" onClick={() => setPendingDeleteId(item.id)}>
+                    <Button variant="outline" size="sm" type="button" onClick={() => setPendingDeleteId(item.id)}>
                       删除
                     </Button>
                     <AlertDialogContent>
@@ -1451,7 +1468,7 @@ function HistoryPanel({
                       </AlertDialogHeader>
                       <AlertDialogFooter>
                         <AlertDialogCancel>取消</AlertDialogCancel>
-                        <AlertDialogAction variant="destructive" onClick={() => confirmDelete(item)}>
+                        <AlertDialogAction variant="outline" onClick={() => confirmDelete(item)}>
                           确认删除
                         </AlertDialogAction>
                       </AlertDialogFooter>
@@ -1522,8 +1539,11 @@ function App({ initialSettings }) {
   }));
   const [providerBusy, setProviderBusy] = useState("");
   const [providerResult, setProviderResult] = useState(null);
+  const [attentionPending, setAttentionPending] = useState(false);
+  const [referenceDraftReady, setReferenceDraftReady] = useState(false);
   const activeRequestsRef = useRef(new Map());
   const canceledRequestsRef = useRef(new Set());
+  const completionReminderBatchRef = useRef(createCompletionReminderBatch());
   const workspacesRef = useRef(workspaces);
   const [imagePreviews, setImagePreviews] = useState(createEmptyImageSlots);
   const resizeDragRef = useRef(null);
@@ -1605,6 +1625,59 @@ function App({ initialSettings }) {
   }, [workspaces]);
 
   useEffect(() => {
+    const reminderTasks = visibleHistory.map((item) => ({
+      key: item.id || item.clientRequestId || item.workspaceId,
+      status: item.status,
+      imageCount: item.status === "success" ? item.images?.length || 0 : 0,
+    }));
+    const result = updateCompletionReminderBatch(completionReminderBatchRef.current, reminderTasks);
+    completionReminderBatchRef.current = result.batch;
+    if (result.shouldNotify) {
+      notifyGenerationComplete(result.imageCount);
+    }
+  }, [visibleHistory]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return undefined;
+
+    if (!attentionPending) {
+      document.title = DEFAULT_DOCUMENT_TITLE;
+      return undefined;
+    }
+
+    let frameIndex = 0;
+    document.title = ATTENTION_DOCUMENT_TITLE_FRAMES[frameIndex] || ATTENTION_DOCUMENT_TITLE;
+    const timer = window.setInterval(() => {
+      frameIndex = (frameIndex + 1) % ATTENTION_DOCUMENT_TITLE_FRAMES.length;
+      document.title = ATTENTION_DOCUMENT_TITLE_FRAMES[frameIndex] || ATTENTION_DOCUMENT_TITLE;
+    }, 220);
+
+    return () => {
+      window.clearInterval(timer);
+      document.title = DEFAULT_DOCUMENT_TITLE;
+    };
+  }, [attentionPending]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return undefined;
+
+    function clearAttentionIfSeen() {
+      if (!pageNeedsAttention(document)) {
+        setAttentionPending(false);
+      }
+    }
+
+    document.title = DEFAULT_DOCUMENT_TITLE;
+    clearAttentionIfSeen();
+    document.addEventListener("visibilitychange", clearAttentionIfSeen);
+    window.addEventListener("focus", clearAttentionIfSeen);
+    return () => {
+      document.removeEventListener("visibilitychange", clearAttentionIfSeen);
+      window.removeEventListener("focus", clearAttentionIfSeen);
+    };
+  }, []);
+
+  useEffect(() => {
     savePanelWidthsLocally(panelWidths);
   }, [panelWidths]);
 
@@ -1655,6 +1728,17 @@ function App({ initialSettings }) {
     } else {
       setSettingsReady(true);
     }
+    loadReferenceImageDraft(MAX_EDIT_IMAGES)
+      .then((savedSlots) => {
+        if (!savedSlots.some(Boolean)) return;
+        updateWorkspace(initialWorkspaceRef.current.id, (workspace) => ({
+          ...workspace,
+          mode: "edit",
+          imageSlots: savedSlots,
+        }));
+      })
+      .catch(() => {})
+      .finally(() => setReferenceDraftReady(true));
   }, []);
 
   useEffect(() => {
@@ -1665,6 +1749,11 @@ function App({ initialSettings }) {
       saveSettingsToServer(settings);
     }
   }, [mode, activeWorkspace?.config, settingsReady]);
+
+  useEffect(() => {
+    if (!referenceDraftReady || !activeWorkspace || activeWorkspace.previewOnly) return;
+    saveReferenceImageDraft(activeWorkspace.imageSlots).catch(() => {});
+  }, [activeWorkspace?.imageSlots, activeWorkspace?.previewOnly, referenceDraftReady]);
 
   useEffect(() => {
     if (!anyLiveTimer) return undefined;
@@ -1719,6 +1808,20 @@ function App({ initialSettings }) {
       return;
     }
     toast.success(message, options);
+  }
+
+  function ensureBrowserNotificationPermission() {
+    if (typeof window === "undefined") return;
+    requestBrowserNotificationPermission(window);
+  }
+
+  function notifyGenerationComplete(imageCount = 0) {
+    if (typeof window !== "undefined") {
+      sendBrowserCompletionNotification(imageCount, window);
+    }
+    if (typeof document !== "undefined" && pageNeedsAttention(document)) {
+      setAttentionPending(true);
+    }
   }
 
   useEffect(() => {
@@ -2177,6 +2280,7 @@ function App({ initialSettings }) {
     const lockedAt = Date.now();
     setClockNow(lockedAt);
     setSubmitLockedUntil(lockedAt + 1000);
+    ensureBrowserNotificationPermission();
 
     const imageFiles = getSelectedImageFiles(workspace);
     const submissionMode = imageFiles.length ? "edit" : "generate";
@@ -2231,10 +2335,11 @@ function App({ initialSettings }) {
     showToast("请求进行中。", "info", 2200);
 
     try {
+      const apiSubmissionConfig = createApiSubmissionConfig(baseConfig);
       const data =
         submissionMode === "generate"
-          ? await submitGenerate(workspaceConfig, requestId, controller.signal)
-          : await submitEdit(workspaceConfig, imageFiles, requestId, controller.signal);
+          ? await submitGenerate(apiSubmissionConfig, requestId, controller.signal)
+          : await submitEdit(apiSubmissionConfig, imageFiles, requestId, controller.signal);
       let shouldCleanupSourceSnapshot = true;
       updateWorkspace(submissionWorkspace.id, (current) => {
         if (current.statusKind === "canceled") {
@@ -2608,9 +2713,15 @@ function App({ initialSettings }) {
           nextSlots[index] = file;
         });
 
+        const referenceDimensions = await readImageDimensions(sourceFiles.find(Boolean)).catch(() => null);
+        const restoredConfig = restoreSmartConfigFromReference(item.config || {}, "edit", referenceDimensions);
         const nextMask = await fileFromAsset(item.source?.mask, "mask.png");
         updateWorkspace(targetId, {
           mode: "edit",
+          config: {
+            ...initialConfig,
+            ...restoredConfig,
+          },
           imageSlots: nextSlots,
           maskFile: nextMask,
           maskOpen: Boolean(nextMask),
@@ -2918,7 +3029,9 @@ async function bootstrap() {
     // Provider settings can be loaded after render.
   }
 
-  createRoot(document.getElementById("root")).render(<App initialSettings={initialSettings} />);
+  const rootContainer = document.getElementById("root");
+  window.__image2ReactRoot ||= createRoot(rootContainer);
+  window.__image2ReactRoot.render(<App initialSettings={initialSettings} />);
 }
 
 bootstrap();
