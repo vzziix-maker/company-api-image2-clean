@@ -1539,7 +1539,7 @@ function App({ initialSettings }) {
   }));
   const [providerBusy, setProviderBusy] = useState("");
   const [providerResult, setProviderResult] = useState(null);
-  const [attentionPending, setAttentionPending] = useState(true);
+  const [attentionPending, setAttentionPending] = useState(false);
   const [referenceDraftReady, setReferenceDraftReady] = useState(false);
   const activeRequestsRef = useRef(new Map());
   const canceledRequestsRef = useRef(new Set());
@@ -1659,7 +1659,22 @@ function App({ initialSettings }) {
   }, [attentionPending]);
 
   useEffect(() => {
-    return undefined;
+    if (typeof document === "undefined") return undefined;
+
+    function clearAttentionIfSeen() {
+      if (!pageNeedsAttention(document)) {
+        setAttentionPending(false);
+      }
+    }
+
+    document.title = DEFAULT_DOCUMENT_TITLE;
+    clearAttentionIfSeen();
+    document.addEventListener("visibilitychange", clearAttentionIfSeen);
+    window.addEventListener("focus", clearAttentionIfSeen);
+    return () => {
+      document.removeEventListener("visibilitychange", clearAttentionIfSeen);
+      window.removeEventListener("focus", clearAttentionIfSeen);
+    };
   }, []);
 
   useEffect(() => {
