@@ -1539,7 +1539,7 @@ function App({ initialSettings }) {
   }));
   const [providerBusy, setProviderBusy] = useState("");
   const [providerResult, setProviderResult] = useState(null);
-  const [attentionPending, setAttentionPending] = useState(false);
+  const [attentionPending, setAttentionPending] = useState(true);
   const [referenceDraftReady, setReferenceDraftReady] = useState(false);
   const activeRequestsRef = useRef(new Map());
   const canceledRequestsRef = useRef(new Set());
@@ -1650,7 +1650,7 @@ function App({ initialSettings }) {
     const timer = window.setInterval(() => {
       frameIndex = (frameIndex + 1) % ATTENTION_DOCUMENT_TITLE_FRAMES.length;
       document.title = ATTENTION_DOCUMENT_TITLE_FRAMES[frameIndex] || ATTENTION_DOCUMENT_TITLE;
-    }, 220);
+    }, 110);
 
     return () => {
       window.clearInterval(timer);
@@ -1659,22 +1659,7 @@ function App({ initialSettings }) {
   }, [attentionPending]);
 
   useEffect(() => {
-    if (typeof document === "undefined") return undefined;
-
-    function clearAttentionIfSeen() {
-      if (!pageNeedsAttention(document)) {
-        setAttentionPending(false);
-      }
-    }
-
-    document.title = DEFAULT_DOCUMENT_TITLE;
-    clearAttentionIfSeen();
-    document.addEventListener("visibilitychange", clearAttentionIfSeen);
-    window.addEventListener("focus", clearAttentionIfSeen);
-    return () => {
-      document.removeEventListener("visibilitychange", clearAttentionIfSeen);
-      window.removeEventListener("focus", clearAttentionIfSeen);
-    };
+    return undefined;
   }, []);
 
   useEffect(() => {

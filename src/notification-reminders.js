@@ -1,16 +1,16 @@
 export const DEFAULT_DOCUMENT_TITLE = "image2生图";
 export const ATTENTION_DOCUMENT_TITLE = "🤡";
 export const EMPTY_ATTENTION_DOCUMENT_TITLE = "\u200B";
-export const TITLE_FRAME_SPACE = "\u2800";
+export const TITLE_FRAME_SPACE = "\u2007";
 export const ATTENTION_DOCUMENT_TITLE_FRAMES = [
-  `🤡${TITLE_FRAME_SPACE.repeat(8)}`,
-  `${TITLE_FRAME_SPACE.repeat(2)}🤡${TITLE_FRAME_SPACE.repeat(6)}`,
-  `${TITLE_FRAME_SPACE.repeat(4)}🤡${TITLE_FRAME_SPACE.repeat(4)}`,
-  `${TITLE_FRAME_SPACE.repeat(6)}🤡${TITLE_FRAME_SPACE.repeat(2)}`,
-  `${TITLE_FRAME_SPACE.repeat(8)}🤡`,
-  `${TITLE_FRAME_SPACE.repeat(6)}🤡${TITLE_FRAME_SPACE.repeat(2)}`,
-  `${TITLE_FRAME_SPACE.repeat(4)}🤡${TITLE_FRAME_SPACE.repeat(4)}`,
-  `${TITLE_FRAME_SPACE.repeat(2)}🤡${TITLE_FRAME_SPACE.repeat(6)}`,
+  `·🤡${TITLE_FRAME_SPACE.repeat(8)}`,
+  `·${TITLE_FRAME_SPACE.repeat(2)}🤡${TITLE_FRAME_SPACE.repeat(6)}`,
+  `·${TITLE_FRAME_SPACE.repeat(4)}🤡${TITLE_FRAME_SPACE.repeat(4)}`,
+  `·${TITLE_FRAME_SPACE.repeat(6)}🤡${TITLE_FRAME_SPACE.repeat(2)}`,
+  `·${TITLE_FRAME_SPACE.repeat(8)}🤡`,
+  `·${TITLE_FRAME_SPACE.repeat(6)}🤡${TITLE_FRAME_SPACE.repeat(2)}`,
+  `·${TITLE_FRAME_SPACE.repeat(4)}🤡${TITLE_FRAME_SPACE.repeat(4)}`,
+  `·${TITLE_FRAME_SPACE.repeat(2)}🤡${TITLE_FRAME_SPACE.repeat(6)}`,
 ];
 
 export function pageNeedsAttention(pageDocument = globalThis.document) {

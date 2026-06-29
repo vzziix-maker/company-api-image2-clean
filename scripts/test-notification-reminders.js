@@ -17,20 +17,20 @@ assert.equal(DEFAULT_DOCUMENT_TITLE, "image2生图");
 assert.equal(ATTENTION_DOCUMENT_TITLE, "🤡");
 assert.equal(EMPTY_ATTENTION_DOCUMENT_TITLE, "\u200B");
 assert.notEqual(EMPTY_ATTENTION_DOCUMENT_TITLE.trim(), "");
-assert.equal(TITLE_FRAME_SPACE, "\u2800");
+assert.equal(TITLE_FRAME_SPACE, "\u2007");
 assert.deepEqual(ATTENTION_DOCUMENT_TITLE_FRAMES, [
-  `🤡${TITLE_FRAME_SPACE.repeat(8)}`,
-  `${TITLE_FRAME_SPACE.repeat(2)}🤡${TITLE_FRAME_SPACE.repeat(6)}`,
-  `${TITLE_FRAME_SPACE.repeat(4)}🤡${TITLE_FRAME_SPACE.repeat(4)}`,
-  `${TITLE_FRAME_SPACE.repeat(6)}🤡${TITLE_FRAME_SPACE.repeat(2)}`,
-  `${TITLE_FRAME_SPACE.repeat(8)}🤡`,
-  `${TITLE_FRAME_SPACE.repeat(6)}🤡${TITLE_FRAME_SPACE.repeat(2)}`,
-  `${TITLE_FRAME_SPACE.repeat(4)}🤡${TITLE_FRAME_SPACE.repeat(4)}`,
-  `${TITLE_FRAME_SPACE.repeat(2)}🤡${TITLE_FRAME_SPACE.repeat(6)}`,
+  `·🤡${TITLE_FRAME_SPACE.repeat(8)}`,
+  `·${TITLE_FRAME_SPACE.repeat(2)}🤡${TITLE_FRAME_SPACE.repeat(6)}`,
+  `·${TITLE_FRAME_SPACE.repeat(4)}🤡${TITLE_FRAME_SPACE.repeat(4)}`,
+  `·${TITLE_FRAME_SPACE.repeat(6)}🤡${TITLE_FRAME_SPACE.repeat(2)}`,
+  `·${TITLE_FRAME_SPACE.repeat(8)}🤡`,
+  `·${TITLE_FRAME_SPACE.repeat(6)}🤡${TITLE_FRAME_SPACE.repeat(2)}`,
+  `·${TITLE_FRAME_SPACE.repeat(4)}🤡${TITLE_FRAME_SPACE.repeat(4)}`,
+  `·${TITLE_FRAME_SPACE.repeat(2)}🤡${TITLE_FRAME_SPACE.repeat(6)}`,
 ]);
 assert.equal(ATTENTION_DOCUMENT_TITLE_FRAMES.every((frame) => frame.includes("🤡")), true);
-assert.equal(ATTENTION_DOCUMENT_TITLE_FRAMES.map((frame) => frame.replaceAll(TITLE_FRAME_SPACE, " "))[0], "🤡        ");
-assert.equal(ATTENTION_DOCUMENT_TITLE_FRAMES.map((frame) => frame.replaceAll(TITLE_FRAME_SPACE, " "))[1], "  🤡      ");
+assert.equal(ATTENTION_DOCUMENT_TITLE_FRAMES.map((frame) => frame.replaceAll(TITLE_FRAME_SPACE, " "))[0], "·🤡        ");
+assert.equal(ATTENTION_DOCUMENT_TITLE_FRAMES.map((frame) => frame.replaceAll(TITLE_FRAME_SPACE, " "))[1], "·  🤡      ");
 
 assert.equal(pageNeedsAttention({ visibilityState: "visible", hasFocus: () => true }), false);
 assert.equal(pageNeedsAttention({ visibilityState: "hidden", hasFocus: () => true }), true);
