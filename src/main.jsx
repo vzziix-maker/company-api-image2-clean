@@ -24,6 +24,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { createImageDownloadFilename } from "./download-filenames.js";
 import {
   ATTENTION_DOCUMENT_TITLE,
   ATTENTION_DOCUMENT_TITLE_FRAMES,
@@ -136,6 +137,7 @@ function createWorkspace({ mode = "generate", config = initialConfig, statusKind
     statusKind,
     loading: false,
     createdAt: new Date().toISOString(),
+    completedAt: null,
     submittedAt: null,
     startedAt: null,
     durationMs: null,
@@ -172,6 +174,7 @@ function createSubmissionWorkspace(workspace, submissionMode, submittedConfig, s
     status: "",
     loading: true,
     createdAt: new Date(startedAt).toISOString(),
+    completedAt: null,
     submittedAt: new Date(startedAt).toISOString(),
     startedAt,
     durationMs: null,
@@ -569,6 +572,7 @@ function getHistoryResultEntries(item) {
         image,
         outputFormat,
         imageIndex,
+        generatedAt: item.completedAt || item.createdAt,
         total,
         src: buildImageSrc(image, outputFormat),
         alt: `生成结果 ${imageIndex + 1}`,
@@ -1149,7 +1153,6 @@ function ImageViewer({ entry, notice, positionLabel, onClose, onNavigate, onCopy
     onClose();
   }
 
-  const downloadExtension = entry?.outputFormat === "jpeg" ? "jpg" : entry?.outputFormat || "png";
   const canUseResultActions = entry?.kind === "result" && entry?.image;
 
   return (
@@ -1159,7 +1162,14 @@ function ImageViewer({ entry, notice, positionLabel, onClose, onNavigate, onCopy
         {positionLabel && <span className="image-viewer-counter">{positionLabel}</span>}
         {canUseResultActions && (
           <div className="image-viewer-actions">
-            <a href={entry.src} download={`gpt-image-2-${entry.imageIndex + 1}.${downloadExtension}`}>
+            <a
+              href={entry.src}
+              download={createImageDownloadFilename({
+                imageIndex: entry.imageIndex,
+                outputFormat: entry.outputFormat,
+                generatedAt: entry.generatedAt,
+              })}
+            >
               下载
             </a>
             <button type="button" onClick={() => onCopy?.(entry.image, entry.outputFormat)}>
@@ -1193,7 +1203,7 @@ function ImageViewer({ entry, notice, positionLabel, onClose, onNavigate, onCopy
   );
 }
 
-function ImageResults({ images, outputFormat, loading, elapsedSeconds, onPreview, onCopy, onImport }) {
+function ImageResults({ images, outputFormat, generatedAt, loading, elapsedSeconds, onPreview, onCopy, onImport }) {
   if (loading) {
     return (
       <Card className="empty-state" size="sm">
@@ -1233,7 +1243,7 @@ function ImageResults({ images, outputFormat, loading, elapsedSeconds, onPreview
                 <span>#{image.index + 1}</span>
                 <div className="result-action-buttons">
                   <Button asChild variant="outline" size="sm">
-                    <a href={src} download={`gpt-image-2-${image.index + 1}.${outputFormat}`}>下载</a>
+                    <a href={src} download={createImageDownloadFilename({ imageIndex: image.index, outputFormat, generatedAt })}>下载</a>
                   </Button>
                   <Button variant="outline" size="sm" type="button" onClick={() => onCopy?.(image, outputFormat)}>
                     复制
@@ -1583,6 +1593,7 @@ function App({ initialSettings }) {
         mode: snapshot.mode || workspace.mode,
         status: workspace.statusKind,
         createdAt: workspace.submittedAt || workspace.createdAt,
+        completedAt: workspace.completedAt || workspace.submittedAt || workspace.createdAt,
         durationMs:
           workspace.statusKind === "running" && workspace.startedAt
             ? Math.max(0, clockNow - workspace.startedAt)
@@ -2341,6 +2352,7 @@ function App({ initialSettings }) {
           ? await submitGenerate(apiSubmissionConfig, requestId, controller.signal)
           : await submitEdit(apiSubmissionConfig, imageFiles, requestId, controller.signal);
       let shouldCleanupSourceSnapshot = true;
+      const completedAt = new Date().toISOString();
       updateWorkspace(submissionWorkspace.id, (current) => {
         if (current.statusKind === "canceled") {
           shouldCleanupSourceSnapshot = false;
@@ -2354,6 +2366,7 @@ function App({ initialSettings }) {
           error: "",
           status: `完成：收到 ${data.images?.length || 0} 张图片。`,
           durationMs: Date.now() - startedAt,
+          completedAt,
           historyId: data.historyId || null,
           sourceSnapshot: null,
         };
@@ -2491,6 +2504,7 @@ function App({ initialSettings }) {
         statusKind: item.status || "failed",
         loading: isRunning,
         submittedAt: item.startedAt || item.createdAt || null,
+        completedAt: item.completedAt || item.createdAt || null,
         startedAt: isRunning ? startedAt : null,
         durationMs: isRunning ? null : item.durationMs ?? null,
         clientRequestId: item.clientRequestId || item.id,
@@ -2511,6 +2525,7 @@ function App({ initialSettings }) {
       statusKind: item.status || "failed",
       loading: isRunning,
       submittedAt: item.startedAt || item.createdAt || null,
+      completedAt: item.completedAt || item.createdAt || null,
       startedAt: isRunning ? startedAt : null,
       durationMs: isRunning ? null : item.durationMs ?? null,
       clientRequestId: item.clientRequestId || item.id,
@@ -2559,6 +2574,8 @@ function App({ initialSettings }) {
         id: previewWorkspace?.id || "preview-workspace",
         mode: previewWorkspace?.mode || mode,
         config: previewWorkspace?.config || config,
+        completedAt: previewWorkspace?.completedAt || previewWorkspace?.createdAt,
+        createdAt: previewWorkspace?.createdAt,
         images: previewImages,
         source: previewWorkspace?.sourceSnapshot || null,
       };
@@ -2935,6 +2952,7 @@ function App({ initialSettings }) {
           <ImageResults
             images={previewImages}
             outputFormat={previewOutputFormat}
+            generatedAt={previewWorkspace?.completedAt || previewWorkspace?.createdAt}
             loading={previewLoading}
             elapsedSeconds={previewElapsedSeconds}
             onPreview={openActiveResultImage}
