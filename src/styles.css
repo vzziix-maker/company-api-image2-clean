@@ -313,6 +313,7 @@
 }
 
 .history-panel {
+  position: relative;
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
   gap: 14px;
@@ -942,9 +943,23 @@
   gap: 12px;
   min-height: 0;
   overflow: auto;
-  padding-right: 4px;
+  padding: 0 4px 44px 0;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
+}
+
+.history-back-top {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 5;
+  background: rgb(0 0 0 / 50%);
+  color: var(--foreground);
+  backdrop-filter: blur(8px);
+}
+
+.history-back-top:hover {
+  background: rgb(0 0 0 / 68%);
 }
 
 .history-item {

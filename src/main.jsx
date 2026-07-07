@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { AlertCircleIcon, SettingsIcon } from "lucide-react";
+import { AlertCircleIcon, ArrowUpIcon, SettingsIcon } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -1342,11 +1342,16 @@ function HistoryPanel({
   onImportSource,
 }) {
   const [pendingDeleteId, setPendingDeleteId] = useState(null);
+  const historyListRef = useRef(null);
   const loadMoreRef = useRef(null);
 
   function confirmDelete(item) {
     setPendingDeleteId(null);
     onDelete(item);
+  }
+
+  function scrollHistoryToTop() {
+    historyListRef.current?.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   useEffect(() => {
@@ -1386,7 +1391,7 @@ function HistoryPanel({
           </div>
         )}
 
-        <div className="history-list">
+        <div className="history-list" ref={historyListRef}>
           {history.map((item) => (
             <Card className="history-item" key={item.id} size="sm">
               <div className="history-meta">
@@ -1494,6 +1499,18 @@ function HistoryPanel({
             </Button>
           )}
         </div>
+        {!!history.length && (
+          <Button
+            className="history-back-top"
+            variant="outline"
+            size="icon-sm"
+            type="button"
+            aria-label="返回历史顶部"
+            onClick={scrollHistoryToTop}
+          >
+            <ArrowUpIcon aria-hidden="true" />
+          </Button>
+        )}
     </aside>
   );
 }
