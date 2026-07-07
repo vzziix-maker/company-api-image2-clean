@@ -110,6 +110,7 @@ const child = spawn(process.execPath, ["server/index.js"], {
     IMAGE_API_KEY: "test-key",
     APP_DATA_DIR: appDataDir,
     HISTORY_LIMIT: "50",
+    ALLOW_LOCAL_PROVIDER_URLS: "1",
   },
   stdio: ["ignore", "pipe", "pipe"],
 });
@@ -120,7 +121,7 @@ async function waitForServer() {
   await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error("server start timeout")), 5000);
     child.stdout.on("data", (chunk) => {
-      if (String(chunk).includes(`localhost:${appPort}`)) {
+      if (String(chunk).includes(`127.0.0.1:${appPort}`)) {
         clearTimeout(timeout);
         resolve();
       }
@@ -133,7 +134,7 @@ async function waitForServer() {
 async function deleteCreatedHistory() {
   await Promise.all(
     createdHistoryIds.map((id) =>
-      fetch(`http://localhost:${appPort}/api/history/${id}`, { method: "DELETE" }).catch(() => {}),
+      fetch(`http://127.0.0.1:${appPort}/api/history/${id}`, { method: "DELETE" }).catch(() => {}),
     ),
   );
 }
@@ -141,7 +142,7 @@ async function deleteCreatedHistory() {
 try {
   await waitForServer();
 
-  const generateResponse = await fetch(`http://localhost:${appPort}/api/generate`, {
+  const generateResponse = await fetch(`http://127.0.0.1:${appPort}/api/generate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -175,7 +176,7 @@ try {
   editForm.append("image[]", new File([pngBuffer(900, 1600)], "source-a.png", { type: "image/png" }));
   editForm.append("image[]", new File([pngBuffer(1200, 800)], "source-b.png", { type: "image/png" }));
 
-  const editResponse = await fetch(`http://localhost:${appPort}/api/edit`, {
+  const editResponse = await fetch(`http://127.0.0.1:${appPort}/api/edit`, {
     method: "POST",
     body: editForm,
   });
@@ -195,7 +196,7 @@ try {
     count: "1",
   }).forEach(([key, value]) => smartRatioForm.set(key, value));
   smartRatioForm.append("image[]", new File([pngBuffer(1200, 800)], "smart-ratio-source.png", { type: "image/png" }));
-  const smartRatioResponse = await fetch(`http://localhost:${appPort}/api/edit`, {
+  const smartRatioResponse = await fetch(`http://127.0.0.1:${appPort}/api/edit`, {
     method: "POST",
     body: smartRatioForm,
   });
@@ -214,14 +215,14 @@ try {
     count: "1",
   }).forEach(([key, value]) => smartPresetForm.set(key, value));
   smartPresetForm.append("image[]", new File([pngBuffer(1234, 987)], "smart-preset-source.png", { type: "image/png" }));
-  const smartPresetResponse = await fetch(`http://localhost:${appPort}/api/edit`, {
+  const smartPresetResponse = await fetch(`http://127.0.0.1:${appPort}/api/edit`, {
     method: "POST",
     body: smartPresetForm,
   });
   const smartPresetData = await smartPresetResponse.json();
   if (smartPresetData.historyId) createdHistoryIds.push(smartPresetData.historyId);
 
-  const historyData = await (await fetch(`http://localhost:${appPort}/api/history`)).json();
+  const historyData = await (await fetch(`http://127.0.0.1:${appPort}/api/history`)).json();
   const historyById = Object.fromEntries(
     createdHistoryIds.map((id) => {
       const item = historyData.items.find((entry) => entry.id === id);

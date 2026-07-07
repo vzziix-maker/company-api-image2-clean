@@ -1,20 +1,29 @@
 import "./env.js";
 import express from "express";
 import { randomUUID } from "node:crypto";
+import { lookup as lookupCallback } from "node:dns";
+import { lookup } from "node:dns/promises";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { isIP } from "node:net";
 import { extname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import multer from "multer";
-import { Agent } from "undici";
+import { Agent, interceptors } from "undici";
 
 const app = express();
+const MAX_EDIT_IMAGES = 5;
+const MAX_EDIT_FILES = MAX_EDIT_IMAGES + 1;
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
     fileSize: 20 * 1024 * 1024,
+    files: MAX_EDIT_FILES,
+    fields: 16,
+    fieldSize: 1 * 1024 * 1024,
   },
 });
 
+const HOST = "127.0.0.1";
 const PORT = Number(process.env.PORT || 43287);
 const IMAGE_API_BASE_URL = (
   process.env.IMAGE_API_BASE_URL ||
@@ -46,7 +55,7 @@ const HISTORY_DIR = DATA_DIR;
 const HISTORY_FILE = new URL("history.json", DATA_DIR);
 const SETTINGS_FILE = new URL("settings.json", DATA_DIR);
 const HISTORY_ASSETS_DIR = new URL("history-assets/", DATA_DIR);
-const MAX_EDIT_IMAGES = 5;
+const ALLOW_LOCAL_PROVIDER_URLS = process.env.ALLOW_LOCAL_PROVIDER_URLS === "1";
 const SMART_SIZE_VALUE = "smart";
 const SMART_ASPECT_RATIO_VALUE = "smart";
 const DEFAULT_PRESET_SIZE = "1408x480";
@@ -70,8 +79,20 @@ const activeJobs = new Map();
 const upstreamDispatcher = new Agent({
   headersTimeout: UPSTREAM_HEADERS_TIMEOUT_MS,
   bodyTimeout: UPSTREAM_BODY_TIMEOUT_MS,
-});
+}).compose([
+  interceptors.dns({
+    lookup: secureDnsLookup,
+  }),
+]);
 let historyWriteQueue = Promise.resolve();
+
+app.use((request, response, next) => {
+  if (isLoopbackAddress(request.socket.remoteAddress)) {
+    next();
+    return;
+  }
+  response.status(403).json({ error: { message: "Local API access is restricted to this computer." } });
+});
 
 app.use(express.json({ limit: "1mb" }));
 
@@ -102,6 +123,11 @@ function numberInRange(value, fallback, min, max) {
   const number = Number(value);
   if (!Number.isFinite(number)) return fallback;
   return Math.min(max, Math.max(min, Math.floor(number)));
+}
+
+function isLoopbackAddress(address = "") {
+  const normalized = String(address).replace(/^::ffff:/, "");
+  return normalized === "::1" || normalized === "127.0.0.1" || normalized.startsWith("127.");
 }
 
 function paginateHistory(items, { cursor, limit }) {
@@ -290,10 +316,95 @@ function normalizeBaseUrl(value) {
   try {
     const url = new URL(baseUrl);
     if (url.protocol !== "http:" && url.protocol !== "https:") return "";
+    if (url.username || url.password) return "";
     return url.toString().replace(/\/$/, "");
   } catch {
     return "";
   }
+}
+
+function providerBaseUrlError(message) {
+  const error = new Error(message);
+  error.status = 400;
+  error.code = "invalid_provider_base_url";
+  return error;
+}
+
+function findProviderBaseUrlError(error) {
+  let current = error;
+  while (current) {
+    if (current.code === "invalid_provider_base_url") return current;
+    current = current.cause;
+  }
+  return null;
+}
+
+function isBlockedIpAddress(address) {
+  const normalized = String(address || "").replace(/^::ffff:/, "");
+  const ipVersion = isIP(normalized);
+  if (ipVersion === 4) {
+    const [a, b] = normalized.split(".").map(Number);
+    return (
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      a >= 224 ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168)
+    );
+  }
+  if (ipVersion === 6) {
+    const lower = normalized.toLowerCase();
+    return lower === "::" || lower === "::1" || lower.startsWith("fc") || lower.startsWith("fd") || lower.startsWith("fe80:");
+  }
+  return false;
+}
+
+async function assertProviderBaseUrlAllowed(baseUrl) {
+  if (ALLOW_LOCAL_PROVIDER_URLS) return;
+  const url = new URL(baseUrl);
+  const hostname = url.hostname.toLowerCase();
+  if (hostname === "localhost" || hostname.endsWith(".localhost") || isBlockedIpAddress(hostname)) {
+    throw providerBaseUrlError("Base URL must point to a public provider host.");
+  }
+
+  let addresses;
+  try {
+    addresses = await lookup(hostname, { all: true, verbatim: true });
+  } catch {
+    throw providerBaseUrlError("Base URL host could not be resolved.");
+  }
+  if (!addresses.length || addresses.some((entry) => isBlockedIpAddress(entry.address))) {
+    throw providerBaseUrlError("Base URL resolves to a blocked local or private address.");
+  }
+}
+
+function secureDnsLookup(origin, options, callback) {
+  lookupCallback(
+    origin.hostname,
+    {
+      all: true,
+      family: options.dualStack === false ? options.affinity : 0,
+      order: "ipv4first",
+    },
+    (error, addresses) => {
+      if (error) {
+        callback(error);
+        return;
+      }
+      const resolvedAddresses = Array.from(addresses || []);
+      if (
+        !ALLOW_LOCAL_PROVIDER_URLS &&
+        (!resolvedAddresses.length || resolvedAddresses.some((entry) => isBlockedIpAddress(entry.address)))
+      ) {
+        callback(providerBaseUrlError("Base URL resolves to a blocked local or private address."));
+        return;
+      }
+      callback(null, resolvedAddresses);
+    },
+  );
 }
 
 function getDefaultProviderSettings() {
@@ -333,6 +444,20 @@ function publicProviderSettings(provider) {
   };
 }
 
+function publicSettings(settings) {
+  if (!settings) return null;
+  const { provider, ...rest } = settings;
+  if (!provider) return rest;
+  const saved = sanitizeProviderSettings(provider);
+  return {
+    ...rest,
+    provider: publicProviderSettings({
+      ...saved,
+      source: "saved",
+    }),
+  };
+}
+
 async function updateProviderSettings(provider) {
   const baseUrl = normalizeBaseUrl(provider?.baseUrl);
   const apiKey = normalizeString(provider?.apiKey, "");
@@ -346,6 +471,7 @@ async function updateProviderSettings(provider) {
     error.status = 400;
     throw error;
   }
+  await assertProviderBaseUrlAllowed(baseUrl);
 
   const settings = (await readSettings()) || {};
   const nextProvider = {
@@ -851,6 +977,7 @@ async function fetchDeer(url, options, externalSignal, baseUrl = "") {
   try {
     return await fetch(url, {
       ...options,
+      redirect: "error",
       signal: controller.signal,
       dispatcher: upstreamDispatcher,
       headersTimeout: UPSTREAM_HEADERS_TIMEOUT_MS,
@@ -859,6 +986,10 @@ async function fetchDeer(url, options, externalSignal, baseUrl = "") {
   } catch (error) {
     if (externalSignal?.aborted) {
       throw canceledJobError();
+    }
+    const providerError = findProviderBaseUrlError(error);
+    if (providerError) {
+      throw providerError;
     }
     if (didTimeout || error.name === "TimeoutError" || error.name === "AbortError") {
       throw timeoutError();
@@ -919,7 +1050,7 @@ app.get("/api/history-assets/:id", async (request, response, next) => {
 
 app.get("/api/settings", async (_request, response, next) => {
   try {
-    response.json({ settings: await readSettings() });
+    response.json({ settings: publicSettings(await readSettings()) });
   } catch (error) {
     next(error);
   }
@@ -935,7 +1066,7 @@ app.put("/api/settings", async (request, response, next) => {
       savedAt: new Date().toISOString(),
     };
     await writeSettings(settings);
-    response.json({ ok: true, settings });
+    response.json({ ok: true, settings: publicSettings(settings) });
   } catch (error) {
     next(error);
   }
@@ -965,6 +1096,7 @@ app.post("/api/provider-settings/verify", async (request, response, next) => {
       apiKey: normalizeString(request.body?.apiKey, ""),
     };
     requireProviderConfig(provider);
+    await assertProviderBaseUrlAllowed(provider.baseUrl);
     const upstreamResponse = await fetchDeer(
       `${provider.baseUrl}/models`,
       {
@@ -1061,6 +1193,7 @@ app.post("/api/generate", async (request, response, next) => {
   try {
     const provider = await readProviderSettings();
     requireProviderConfig(provider);
+    await assertProviderBaseUrlAllowed(provider.baseUrl);
     payload = buildPayload(request.body, "generate");
     const clientRequestId = normalizeHistoryId(request.body?.clientRequestId);
     history = await appendHistory({
@@ -1146,6 +1279,7 @@ app.post(
     try {
       const provider = await readProviderSettings();
       requireProviderConfig(provider);
+      await assertProviderBaseUrlAllowed(provider.baseUrl);
       images = collectEditImages(request.files);
       mask = request.files?.mask?.[0];
       if (!images.length) {
@@ -1251,6 +1385,9 @@ app.post(
 );
 
 app.use((error, _request, response, _next) => {
+  if (error instanceof multer.MulterError) {
+    error.status = 400;
+  }
   const status = error.status || 500;
   if (error.retryAfter) {
     response.set("Retry-After", String(error.retryAfter));
@@ -1265,6 +1402,6 @@ app.use((error, _request, response, _next) => {
   });
 });
 
-app.listen(PORT, () => {
-  console.log(`Image API server listening on http://localhost:${PORT}`);
+app.listen(PORT, HOST, () => {
+  console.log(`Image API server listening on http://${HOST}:${PORT}`);
 });

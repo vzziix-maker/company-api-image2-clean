@@ -2,7 +2,7 @@ import "../server/env.js";
 
 const port = Number(process.env.PORT || 43287);
 
-const response = await fetch(`http://localhost:${port}/api/generate`, {
+const response = await fetch(`http://127.0.0.1:${port}/api/generate`, {
   method: "POST",
   headers: {
     "Content-Type": "application/json",

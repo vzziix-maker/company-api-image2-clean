@@ -42,7 +42,7 @@ function readImage(buffer) {
   return readPng(buffer) || readJpeg(buffer) || { format: "unknown", width: 0, height: 0 };
 }
 
-const response = await fetch(`http://localhost:${port}/api/generate`, {
+const response = await fetch(`http://127.0.0.1:${port}/api/generate`, {
   method: "POST",
   headers: {
     "Content-Type": "application/json",

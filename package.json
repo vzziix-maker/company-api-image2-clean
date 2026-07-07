@@ -5,10 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently --kill-others --success first \"npm run dev:server\" \"npm run dev:client\"",
-    "dev:client": "vite --host 0.0.0.0 --strictPort",
+    "dev:client": "vite --host 127.0.0.1 --strictPort",
     "dev:server": "node server/index.js",
     "build": "vite build",
-    "preview": "vite preview --host 0.0.0.0",
+    "preview": "vite preview --host 127.0.0.1",
     "test:generate": "node scripts/test-generate.js",
     "test:params": "node scripts/test-params.js",
     "test:payload-routing": "node scripts/test-payload-routing.js",
@@ -18,7 +18,8 @@
     "test:download-filenames": "node scripts/test-download-filenames.js",
     "test:notifications": "node scripts/test-notification-reminders.js",
     "test:reference-draft": "node scripts/test-reference-image-draft-storage.js",
-    "test:rate-limit": "node scripts/test-rate-limit.js"
+    "test:rate-limit": "node scripts/test-rate-limit.js",
+    "test:security": "node scripts/test-security-controls.js"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.2.9",

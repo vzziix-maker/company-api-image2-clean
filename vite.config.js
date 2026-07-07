@@ -11,9 +11,13 @@ export default defineConfig({
     },
   },
   server: {
+    host: "127.0.0.1",
     port: 43288,
     proxy: {
-      "/api": process.env.VITE_API_PROXY_TARGET || "http://localhost:43287",
+      "/api": process.env.VITE_API_PROXY_TARGET || "http://127.0.0.1:43287",
     },
+  },
+  preview: {
+    host: "127.0.0.1",
   },
 });

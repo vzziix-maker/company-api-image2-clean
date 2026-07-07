@@ -943,7 +943,7 @@
   gap: 12px;
   min-height: 0;
   overflow: auto;
-  padding: 0 4px 44px 0;
+  padding: 0 4px 58px 0;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
 }
@@ -953,6 +953,9 @@
   right: 10px;
   bottom: 10px;
   z-index: 5;
+  width: 42px;
+  height: 42px;
+  border-radius: var(--radius-xl);
   background: rgb(0 0 0 / 50%);
   color: var(--foreground);
   backdrop-filter: blur(8px);
@@ -960,6 +963,11 @@
 
 .history-back-top:hover {
   background: rgb(0 0 0 / 68%);
+}
+
+.history-back-top > svg:not([class*="size-"]) {
+  width: 20px;
+  height: 20px;
 }
 
 .history-item {

@@ -54,6 +54,7 @@ const child = spawn(process.execPath, ["server/index.js"], {
     IMAGE_API_KEY: "test-key",
     APP_DATA_DIR: appDataDir,
     HISTORY_LIMIT: "50",
+    ALLOW_LOCAL_PROVIDER_URLS: "1",
   },
   stdio: ["ignore", "pipe", "pipe"],
 });
@@ -62,7 +63,7 @@ async function waitForServer() {
   await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error("server start timeout")), 5000);
     child.stdout.on("data", (chunk) => {
-      if (String(chunk).includes(`localhost:${appPort}`)) {
+      if (String(chunk).includes(`127.0.0.1:${appPort}`)) {
         clearTimeout(timeout);
         resolve();
       }
@@ -73,7 +74,7 @@ async function waitForServer() {
 }
 
 async function readHistory() {
-  const response = await fetch(`http://localhost:${appPort}/api/history`);
+  const response = await fetch(`http://127.0.0.1:${appPort}/api/history`);
   if (!response.ok) {
     throw new Error(`history failed: ${response.status}`);
   }
@@ -93,7 +94,7 @@ async function waitFor(predicate, label, timeoutMs = 5000) {
 
 function startGenerate(clientRequestId, prompt) {
   const controller = new AbortController();
-  const promise = fetch(`http://localhost:${appPort}/api/generate`, {
+  const promise = fetch(`http://127.0.0.1:${appPort}/api/generate`, {
     method: "POST",
     signal: controller.signal,
     headers: { "Content-Type": "application/json" },
