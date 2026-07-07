@@ -8,8 +8,10 @@ const appPort = Number(process.env.MOCK_APP_PORT || 19909);
 const blockedPort = Number(process.env.MOCK_BLOCKED_PORT || 19910);
 const appDataDir = await mkdtemp(join(tmpdir(), "image2-security-"));
 const rebindHost = "security-rebind.test";
+const allowedPrivateHost = "ai-platform-cicada-llm-api.limayao.com";
 const dnsLoaderPath = join(appDataDir, "dns-rebind-loader.mjs");
 let blockedHits = 0;
+let allowedPrivateHits = 0;
 
 await mkdir(appDataDir, { recursive: true });
 await writeFile(
@@ -20,12 +22,24 @@ import dnsPromises from "node:dns/promises";
 import { syncBuiltinESMExports } from "node:module";
 
 const rebindHost = process.env.SECURITY_REBIND_HOST;
+const allowedPrivateHost = process.env.SECURITY_ALLOWED_PRIVATE_HOST;
 const publicAddress = "93.184.216.34";
 const blockedAddress = "127.0.0.1";
+const allowedPrivateAddress = "10.66.186.204";
 const originalLookup = dns.lookup.bind(dns);
 const originalPromisesLookup = dnsPromises.lookup.bind(dnsPromises);
 
 dns.lookup = function patchedLookup(hostname, options, callback) {
+  if (hostname === allowedPrivateHost) {
+    const cb = typeof options === "function" ? options : callback;
+    const opts = typeof options === "function" ? {} : options || {};
+    if (opts.all) {
+      process.nextTick(() => cb(null, [{ address: blockedAddress, family: 4 }]));
+      return;
+    }
+    process.nextTick(() => cb(null, blockedAddress, 4));
+    return;
+  }
   if (hostname !== rebindHost) return originalLookup(hostname, options, callback);
   const cb = typeof options === "function" ? options : callback;
   const opts = typeof options === "function" ? {} : options || {};
@@ -37,6 +51,10 @@ dns.lookup = function patchedLookup(hostname, options, callback) {
 };
 
 dnsPromises.lookup = async function patchedPromisesLookup(hostname, options) {
+  if (hostname === allowedPrivateHost) {
+    if (options?.all) return [{ address: allowedPrivateAddress, family: 4 }];
+    return { address: allowedPrivateAddress, family: 4 };
+  }
   if (hostname !== rebindHost) return originalPromisesLookup(hostname, options);
   if (options?.all) return [{ address: publicAddress, family: 4 }];
   return { address: publicAddress, family: 4 };
@@ -65,7 +83,11 @@ await writeFile(
 );
 
 const blockedMock = createServer((_request, response) => {
-  blockedHits += 1;
+  if (_request.headers.host?.startsWith(allowedPrivateHost)) {
+    allowedPrivateHits += 1;
+  } else {
+    blockedHits += 1;
+  }
   response.writeHead(200, { "Content-Type": "application/json" });
   response.end(JSON.stringify({ data: [{ id: "gpt-image-2" }] }));
 });
@@ -81,6 +103,7 @@ const child = spawn(process.execPath, ["server/index.js"], {
     APP_DATA_DIR: appDataDir,
     NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${dnsLoaderPath}`].filter(Boolean).join(" "),
     SECURITY_REBIND_HOST: rebindHost,
+    SECURITY_ALLOWED_PRIVATE_HOST: allowedPrivateHost,
   },
   stdio: ["ignore", "pipe", "pipe"],
 });
@@ -140,6 +163,14 @@ try {
   });
   const rebindVerifyBody = await readJson(rebindVerifyResponse);
 
+  const allowedPrivateBaseUrl = `http://${allowedPrivateHost}:${blockedPort}/v1`;
+  const allowedPrivateVerifyResponse = await fetch(`http://127.0.0.1:${appPort}/api/provider-settings/verify`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ baseUrl: allowedPrivateBaseUrl, apiKey: "sk-allowed-private-target" }),
+  });
+  const allowedPrivateVerifyBody = await readJson(allowedPrivateVerifyResponse);
+
   const editForm = new FormData();
   editForm.set("prompt", "too many files");
   editForm.set("sizeMode", "ratio");
@@ -173,7 +204,10 @@ try {
     saveProviderBody.error?.code === "invalid_provider_base_url" &&
     rebindVerifyResponse.status === 400 &&
     rebindVerifyBody.error?.code === "invalid_provider_base_url" &&
+    allowedPrivateVerifyResponse.status === 200 &&
+    allowedPrivateVerifyBody.ok === true &&
     blockedHits === 0 &&
+    allowedPrivateHits === 1 &&
     uploadResponse.status === 400 &&
     (uploadBody.error?.code === "LIMIT_FILE_COUNT" || uploadBody.error?.message);
 
@@ -185,7 +219,9 @@ try {
         verifyStatus: verifyResponse.status,
         saveProviderStatus: saveProviderResponse.status,
         rebindVerifyStatus: rebindVerifyResponse.status,
+        allowedPrivateVerifyStatus: allowedPrivateVerifyResponse.status,
         blockedHits,
+        allowedPrivateHits,
         uploadStatus: uploadResponse.status,
         uploadCode: uploadBody.error?.code,
       },

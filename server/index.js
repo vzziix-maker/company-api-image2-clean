@@ -56,6 +56,7 @@ const HISTORY_FILE = new URL("history.json", DATA_DIR);
 const SETTINGS_FILE = new URL("settings.json", DATA_DIR);
 const HISTORY_ASSETS_DIR = new URL("history-assets/", DATA_DIR);
 const ALLOW_LOCAL_PROVIDER_URLS = process.env.ALLOW_LOCAL_PROVIDER_URLS === "1";
+const PRIVATE_PROVIDER_HOST_ALLOWLIST = new Set(["ai-platform-cicada-llm-api.limayao.com"]);
 const SMART_SIZE_VALUE = "smart";
 const SMART_ASPECT_RATIO_VALUE = "smart";
 const DEFAULT_PRESET_SIZE = "1408x480";
@@ -362,10 +363,15 @@ function isBlockedIpAddress(address) {
   return false;
 }
 
+function isAllowedPrivateProviderHost(hostname) {
+  return PRIVATE_PROVIDER_HOST_ALLOWLIST.has(String(hostname || "").toLowerCase());
+}
+
 async function assertProviderBaseUrlAllowed(baseUrl) {
   if (ALLOW_LOCAL_PROVIDER_URLS) return;
   const url = new URL(baseUrl);
   const hostname = url.hostname.toLowerCase();
+  const allowPrivateResolution = isAllowedPrivateProviderHost(hostname);
   if (hostname === "localhost" || hostname.endsWith(".localhost") || isBlockedIpAddress(hostname)) {
     throw providerBaseUrlError("Base URL must point to a public provider host.");
   }
@@ -376,7 +382,7 @@ async function assertProviderBaseUrlAllowed(baseUrl) {
   } catch {
     throw providerBaseUrlError("Base URL host could not be resolved.");
   }
-  if (!addresses.length || addresses.some((entry) => isBlockedIpAddress(entry.address))) {
+  if (!allowPrivateResolution && (!addresses.length || addresses.some((entry) => isBlockedIpAddress(entry.address)))) {
     throw providerBaseUrlError("Base URL resolves to a blocked local or private address.");
   }
 }
@@ -397,6 +403,7 @@ function secureDnsLookup(origin, options, callback) {
       const resolvedAddresses = Array.from(addresses || []);
       if (
         !ALLOW_LOCAL_PROVIDER_URLS &&
+        !isAllowedPrivateProviderHost(origin.hostname) &&
         (!resolvedAddresses.length || resolvedAddresses.some((entry) => isBlockedIpAddress(entry.address)))
       ) {
         callback(providerBaseUrlError("Base URL resolves to a blocked local or private address."));
@@ -411,6 +418,7 @@ function getDefaultProviderSettings() {
   return {
     baseUrl: normalizeBaseUrl(IMAGE_API_BASE_URL),
     apiKey: normalizeString(IMAGE_API_KEY, ""),
+    name: "环境变量",
     source: "env",
   };
 }
@@ -423,44 +431,175 @@ function sanitizeProviderSettings(provider = {}) {
   };
 }
 
+function normalizeProviderProfileName(value, fallback) {
+  return normalizeString(value, fallback).slice(0, 80);
+}
+
+function providerProfileNameFromBaseUrl(baseUrl, fallback) {
+  try {
+    return normalizeProviderProfileName(new URL(baseUrl).hostname, fallback);
+  } catch {
+    return fallback;
+  }
+}
+
+function sanitizeProviderProfile(profile = {}, fallbackId = "") {
+  const id = normalizeHistoryId(profile.id) || normalizeHistoryId(fallbackId);
+  const baseUrl = normalizeBaseUrl(profile.baseUrl);
+  const apiKey = normalizeString(profile.apiKey, "");
+  if (!id || (!baseUrl && !apiKey)) return null;
+  return {
+    id,
+    name: normalizeProviderProfileName(profile.name, providerProfileNameFromBaseUrl(baseUrl, "未命名 Key")),
+    baseUrl,
+    apiKey,
+    savedAt: normalizeString(profile.savedAt, ""),
+    updatedAt: normalizeString(profile.updatedAt, ""),
+  };
+}
+
+function getSavedProviderProfiles(settings = {}) {
+  const profiles = [];
+  const usedIds = new Set();
+  const addProfile = (profile, fallbackId) => {
+    const sanitized = sanitizeProviderProfile(profile, fallbackId);
+    if (!sanitized) return;
+    let id = sanitized.id;
+    if (usedIds.has(id)) {
+      id = randomUUID();
+    }
+    usedIds.add(id);
+    profiles.push({ ...sanitized, id });
+  };
+
+  if (Array.isArray(settings.providerProfiles)) {
+    settings.providerProfiles.forEach((profile, index) => addProfile(profile, `profile-${index + 1}`));
+  }
+
+  if (!profiles.length) {
+    const legacy = sanitizeProviderSettings(settings.provider);
+    if (legacy.baseUrl && legacy.apiKey) {
+      addProfile(
+        {
+          id: normalizeHistoryId(settings.activeProviderId) || "default",
+          name: "默认 Key",
+          ...legacy,
+        },
+        "default",
+      );
+    }
+  }
+
+  return profiles;
+}
+
+function getProviderProfileState(settings = {}) {
+  const profiles = getSavedProviderProfiles(settings);
+  const requestedActiveId = normalizeHistoryId(settings.activeProviderId);
+  const active = profiles.find((profile) => profile.id === requestedActiveId) || profiles[0] || null;
+  return {
+    profiles,
+    active,
+    activeProviderId: active?.id || "",
+  };
+}
+
 async function readProviderSettings() {
   const settings = await readSettings();
-  const saved = sanitizeProviderSettings(settings?.provider);
+  const { active } = getProviderProfileState(settings || {});
   const fallback = getDefaultProviderSettings();
+  if (!active) return fallback;
   return {
-    baseUrl: saved.baseUrl || fallback.baseUrl,
-    apiKey: saved.apiKey || fallback.apiKey,
-    source: saved.baseUrl && saved.apiKey ? "saved" : fallback.source,
-    savedAt: saved.savedAt,
+    ...active,
+    baseUrl: active.baseUrl || fallback.baseUrl,
+    apiKey: active.apiKey || fallback.apiKey,
+    source: active.baseUrl && active.apiKey ? "saved" : fallback.source,
   };
 }
 
 function publicProviderSettings(provider) {
   return {
+    id: provider.id || null,
+    name: provider.name || null,
     baseUrl: provider.baseUrl,
     hasApiKey: Boolean(provider.apiKey),
     source: provider.source,
     savedAt: provider.savedAt || null,
+    updatedAt: provider.updatedAt || null,
+  };
+}
+
+function publicProviderProfile(profile, activeProviderId) {
+  return {
+    id: profile.id,
+    name: profile.name,
+    baseUrl: profile.baseUrl,
+    hasApiKey: Boolean(profile.apiKey),
+    source: "saved",
+    savedAt: profile.savedAt || null,
+    updatedAt: profile.updatedAt || null,
+    active: profile.id === activeProviderId,
+  };
+}
+
+function publicProviderPayload(settings = {}) {
+  const { profiles, active, activeProviderId } = getProviderProfileState(settings);
+  const provider = active ? { ...active, source: "saved" } : getDefaultProviderSettings();
+  return {
+    provider: publicProviderSettings(provider),
+    profiles: profiles.map((profile) => publicProviderProfile(profile, activeProviderId)),
+    activeProviderId,
   };
 }
 
 function publicSettings(settings) {
   if (!settings) return null;
-  const { provider, ...rest } = settings;
-  if (!provider) return rest;
-  const saved = sanitizeProviderSettings(provider);
+  const { provider, providerProfiles, activeProviderId, ...rest } = settings;
+  const publicProvider = publicProviderPayload(settings);
   return {
     ...rest,
-    provider: publicProviderSettings({
-      ...saved,
-      source: "saved",
-    }),
+    ...publicProvider,
   };
 }
 
+async function writeProviderProfileSettings(settings, profiles, activeProviderId) {
+  const active = profiles.find((profile) => profile.id === activeProviderId) || profiles[0] || null;
+  const nextSettings = {
+    ...settings,
+    providerProfiles: profiles,
+    activeProviderId: active?.id || "",
+  };
+  if (active) {
+    nextSettings.provider = {
+      baseUrl: active.baseUrl,
+      apiKey: active.apiKey,
+      savedAt: active.savedAt || active.updatedAt || new Date().toISOString(),
+    };
+  } else {
+    delete nextSettings.provider;
+  }
+  await writeSettings(nextSettings);
+  return nextSettings;
+}
+
+function notFoundError(message) {
+  const error = new Error(message);
+  error.status = 404;
+  return error;
+}
+
 async function updateProviderSettings(provider) {
-  const baseUrl = normalizeBaseUrl(provider?.baseUrl);
-  const apiKey = normalizeString(provider?.apiKey, "");
+  const settings = (await readSettings()) || {};
+  const { profiles } = getProviderProfileState(settings);
+  const requestedId = normalizeHistoryId(provider?.id);
+  const existingIndex = requestedId ? profiles.findIndex((profile) => profile.id === requestedId) : -1;
+  if (requestedId && existingIndex < 0) {
+    throw notFoundError("Provider profile not found.");
+  }
+
+  const existing = existingIndex >= 0 ? profiles[existingIndex] : null;
+  const baseUrl = normalizeBaseUrl(provider?.baseUrl) || existing?.baseUrl || "";
+  const apiKey = normalizeString(provider?.apiKey, "") || existing?.apiKey || "";
   if (!baseUrl) {
     const error = new Error("Base URL is invalid.");
     error.status = 400;
@@ -473,19 +612,60 @@ async function updateProviderSettings(provider) {
   }
   await assertProviderBaseUrlAllowed(baseUrl);
 
-  const settings = (await readSettings()) || {};
+  const now = new Date().toISOString();
+  const id = requestedId || randomUUID();
   const nextProvider = {
+    id,
+    name: normalizeProviderProfileName(
+      provider?.name,
+      existing?.name || providerProfileNameFromBaseUrl(baseUrl, `Key ${profiles.length + 1}`),
+    ),
     baseUrl,
     apiKey,
-    savedAt: new Date().toISOString(),
+    savedAt: existing?.savedAt || now,
+    updatedAt: now,
   };
-  await writeSettings({
-    ...settings,
-    provider: nextProvider,
-  });
+
+  const nextProfiles = existingIndex >= 0 ? profiles.map((profile, index) => (index === existingIndex ? nextProvider : profile)) : [...profiles, nextProvider];
+  const nextSettings = await writeProviderProfileSettings(settings, nextProfiles, id);
+  return publicProviderPayload(nextSettings);
+}
+
+async function selectProviderSettings(id) {
+  const settings = (await readSettings()) || {};
+  const { profiles } = getProviderProfileState(settings);
+  const profileId = normalizeHistoryId(id);
+  if (!profileId || !profiles.some((profile) => profile.id === profileId)) {
+    throw notFoundError("Provider profile not found.");
+  }
+  const nextSettings = await writeProviderProfileSettings(settings, profiles, profileId);
+  return publicProviderPayload(nextSettings);
+}
+
+async function deleteProviderSettings(id) {
+  const settings = (await readSettings()) || {};
+  const { profiles, activeProviderId } = getProviderProfileState(settings);
+  const profileId = normalizeHistoryId(id);
+  const nextProfiles = profiles.filter((profile) => profile.id !== profileId);
+  if (!profileId || nextProfiles.length === profiles.length) {
+    throw notFoundError("Provider profile not found.");
+  }
+  const nextActiveId = activeProviderId === profileId ? nextProfiles[0]?.id || "" : activeProviderId;
+  const nextSettings = await writeProviderProfileSettings(settings, nextProfiles, nextActiveId);
+  return publicProviderPayload(nextSettings);
+}
+
+async function providerDraftToConfig(provider) {
+  const settings = (await readSettings()) || {};
+  const { profiles } = getProviderProfileState(settings);
+  const requestedId = normalizeHistoryId(provider?.id);
+  const existing = requestedId ? profiles.find((profile) => profile.id === requestedId) : null;
+  if (requestedId && !existing) {
+    throw notFoundError("Provider profile not found.");
+  }
   return {
-    ...nextProvider,
-    source: "saved",
+    baseUrl: normalizeBaseUrl(provider?.baseUrl) || existing?.baseUrl || "",
+    apiKey: normalizeString(provider?.apiKey, "") || existing?.apiKey || "",
   };
 }
 
@@ -1074,7 +1254,7 @@ app.put("/api/settings", async (request, response, next) => {
 
 app.get("/api/provider-settings", async (_request, response, next) => {
   try {
-    response.json({ provider: publicProviderSettings(await readProviderSettings()) });
+    response.json(publicProviderPayload((await readSettings()) || {}));
   } catch (error) {
     next(error);
   }
@@ -1082,8 +1262,26 @@ app.get("/api/provider-settings", async (_request, response, next) => {
 
 app.put("/api/provider-settings", async (request, response, next) => {
   try {
-    const provider = await updateProviderSettings(request.body || {});
-    response.json({ ok: true, provider: publicProviderSettings(provider) });
+    const payload = await updateProviderSettings(request.body || {});
+    response.json({ ok: true, ...payload });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/provider-settings/select", async (request, response, next) => {
+  try {
+    const payload = await selectProviderSettings(request.body?.id);
+    response.json({ ok: true, ...payload });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/provider-settings/:id", async (request, response, next) => {
+  try {
+    const payload = await deleteProviderSettings(request.params.id);
+    response.json({ ok: true, ...payload });
   } catch (error) {
     next(error);
   }
@@ -1091,10 +1289,7 @@ app.put("/api/provider-settings", async (request, response, next) => {
 
 app.post("/api/provider-settings/verify", async (request, response, next) => {
   try {
-    const provider = {
-      baseUrl: normalizeBaseUrl(request.body?.baseUrl),
-      apiKey: normalizeString(request.body?.apiKey, ""),
-    };
+    const provider = await providerDraftToConfig(request.body || {});
     requireProviderConfig(provider);
     await assertProviderBaseUrlAllowed(provider.baseUrl);
     const upstreamResponse = await fetchDeer(

@@ -658,62 +658,156 @@ function SelectField({ label, value, onChange, options, getDisabled }) {
   );
 }
 
+function createProviderDraft(provider = {}) {
+  return {
+    id: provider.id || "",
+    name: provider.name || "",
+    baseUrl: provider.baseUrl || "",
+    apiKey: "",
+  };
+}
+
+function providerProfileFromProvider(provider) {
+  if (!provider || provider.source !== "saved") return null;
+  return {
+    id: provider.id || "default",
+    name: provider.name || "默认 Key",
+    baseUrl: provider.baseUrl || "",
+    hasApiKey: Boolean(provider.hasApiKey),
+    source: "saved",
+    savedAt: provider.savedAt || null,
+    updatedAt: provider.updatedAt || null,
+    active: true,
+  };
+}
+
 function ProviderSettingsDialog({
   open,
+  editorOpen,
   provider,
+  profiles,
   draft,
   busy,
   result,
   onOpenChange,
+  onEditorOpenChange,
   onDraftChange,
+  onUseProfile,
+  onEdit,
+  onNew,
+  onDelete,
   onVerify,
   onSave,
 }) {
-  const hasSavedKey = provider?.hasApiKey;
+  const draftProfile = profiles.find((profile) => profile.id === draft.id);
+  const hasSavedKey = Boolean(draftProfile?.hasApiKey);
+  const isEditing = Boolean(draft.id);
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="provider-dialog">
-        <DialogHeader>
-          <DialogTitle>模型设置</DialogTitle>
-          <DialogDescription>填写兼容 OpenAI 的 Base URL 和 Key，用于调用 gpt-image-2。</DialogDescription>
-        </DialogHeader>
+    <>
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="provider-dialog">
+          <DialogHeader>
+            <DialogTitle>模型设置</DialogTitle>
+            <DialogDescription>管理兼容 OpenAI 的 Base URL 和 Key，用于调用 gpt-image-2。</DialogDescription>
+          </DialogHeader>
 
-        <div className="provider-form">
-          <Field label="Base URL">
-            <Input
-              value={draft.baseUrl}
-              onChange={(event) => onDraftChange({ ...draft, baseUrl: event.target.value })}
-              placeholder="https://example.com/v1"
-            />
-          </Field>
-          <Field label="Key">
-            <Input
-              type="password"
-              value={draft.apiKey}
-              onChange={(event) => onDraftChange({ ...draft, apiKey: event.target.value })}
-              placeholder={hasSavedKey ? "已保存，重新填写可替换" : "sk-..."}
-            />
-          </Field>
-          <div className="provider-status">
-            <Badge variant={hasSavedKey ? "secondary" : "outline"}>{hasSavedKey ? "已保存 Key" : "未保存 Key"}</Badge>
-            {provider?.baseUrl && <span>{provider.baseUrl}</span>}
+          <div className="provider-list">
+            {profiles.length ? (
+              profiles.map((profile) => {
+                const active = provider?.id === profile.id;
+                return (
+                  <div className="provider-list-item" key={profile.id}>
+                    <button className="provider-list-main" type="button" onClick={() => onUseProfile(profile.id)}>
+                      <span className="provider-list-title">
+                        {profile.name || profile.baseUrl}
+                        {active && <Badge variant="secondary">当前</Badge>}
+                      </span>
+                      <span className="provider-list-url">{profile.baseUrl}</span>
+                    </button>
+                    <div className="provider-list-actions">
+                      {!active && (
+                        <Button variant="outline" size="sm" type="button" disabled={busy === "select"} onClick={() => onUseProfile(profile.id)}>
+                          使用
+                        </Button>
+                      )}
+                      <Button variant="outline" size="sm" type="button" onClick={() => onEdit(profile)}>
+                        修改
+                      </Button>
+                      <Button variant="outline" size="sm" type="button" disabled={busy === "delete"} onClick={() => onDelete(profile.id)}>
+                        删除
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })
+            ) : (
+              <div className="provider-empty">
+                <p>还没有保存的 Key。</p>
+                <span>新增后可在这里切换、修改和删除。</span>
+              </div>
+            )}
           </div>
-          {result?.message && (
-            <p className={cn("provider-result", result.tone === "error" && "is-error")}>{result.message}</p>
-          )}
-        </div>
 
-        <DialogFooter>
-          <Button variant="outline" type="button" disabled={busy === "verify"} onClick={onVerify}>
-            {busy === "verify" ? "验证中..." : "验证"}
-          </Button>
-          <Button type="button" disabled={busy === "save"} onClick={onSave}>
-            {busy === "save" ? "保存中..." : "保存"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+          {result?.message && <p className={cn("provider-result", result.tone === "error" && "is-error")}>{result.message}</p>}
+
+          <DialogFooter>
+            <Button type="button" onClick={onNew}>
+              新增 Key
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={editorOpen} onOpenChange={onEditorOpenChange}>
+        <DialogContent className="provider-dialog">
+          <DialogHeader>
+            <DialogTitle>{isEditing ? "修改 Key" : "新增 Key"}</DialogTitle>
+            <DialogDescription>{isEditing ? "Key 留空会保留原 Key；重新填写则替换。" : "填写兼容 OpenAI 的 Base URL 和 Key。"}</DialogDescription>
+          </DialogHeader>
+
+          <div className="provider-form">
+            <Field label="名称">
+              <Input
+                value={draft.name}
+                onChange={(event) => onDraftChange({ ...draft, name: event.target.value })}
+                placeholder="例如：公司 Key"
+              />
+            </Field>
+            <Field label="Base URL">
+              <Input
+                value={draft.baseUrl}
+                onChange={(event) => onDraftChange({ ...draft, baseUrl: event.target.value })}
+                placeholder="https://example.com/v1"
+              />
+            </Field>
+            <Field label="Key">
+              <Input
+                type="password"
+                value={draft.apiKey}
+                onChange={(event) => onDraftChange({ ...draft, apiKey: event.target.value })}
+                placeholder={hasSavedKey ? "已保存，留空则不替换" : "sk-..."}
+              />
+            </Field>
+            <div className="provider-status">
+              <Badge variant={hasSavedKey ? "secondary" : "outline"}>{hasSavedKey ? "已保存 Key" : "未保存 Key"}</Badge>
+              {provider?.name && <Badge variant="outline">当前：{provider.name}</Badge>}
+              {provider?.baseUrl && <span>{provider.baseUrl}</span>}
+            </div>
+            {result?.message && <p className={cn("provider-result", result.tone === "error" && "is-error")}>{result.message}</p>}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" type="button" disabled={busy === "verify"} onClick={onVerify}>
+              {busy === "verify" ? "验证中..." : "验证"}
+            </Button>
+            <Button type="button" disabled={busy === "save"} onClick={onSave}>
+              {busy === "save" ? "保存中..." : "保存"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
@@ -1302,13 +1396,27 @@ function getRetryAfter(error) {
   return Number.isFinite(fromMessage) && fromMessage > 0 ? fromMessage : 0;
 }
 
-function isTimeoutError(error) {
-  return error?.code === "upstream_timeout" || /operation was timeout|timed out|timeout/i.test(error?.message || "");
+function isLocalTimeoutError(error) {
+  return error?.code === "upstream_timeout";
+}
+
+function isGatewayTimeoutError(error) {
+  return error?.status === 504 || /gateway\s+time[-\s]?out/i.test(error?.message || "");
+}
+
+function isUpstreamOperationTimeoutError(error) {
+  return /operation was timeout|timed out|time[-\s]?out|timeout/i.test(error?.message || "");
 }
 
 function formatSubmitError(error) {
-  if (isTimeoutError(error)) {
-    return "图片生成服务超时了。已把本地等待时间提高到 60 分钟；如果仍然出现，可以先降低数量、尺寸或质量后重试。";
+  if (isLocalTimeoutError(error)) {
+    return "本地等待图片服务超过 60 分钟，已自动停止。可以降低数量、尺寸或质量后重试。";
+  }
+  if (isGatewayTimeoutError(error)) {
+    return "上游服务网关超时了。通常是图片服务或中转 API 在完成前断开；可以降低数量、尺寸或质量后重试。";
+  }
+  if (isUpstreamOperationTimeoutError(error)) {
+    return "上游图片服务处理超时了。可以稍后重试，或降低数量、尺寸、质量后重试。";
   }
   return error.message;
 }
@@ -1559,11 +1667,10 @@ function App({ initialSettings }) {
   const [submitLockedUntil, setSubmitLockedUntil] = useState(0);
   const [imageDimensions, setImageDimensions] = useState(createEmptyImageSlots);
   const [providerOpen, setProviderOpen] = useState(false);
+  const [providerEditorOpen, setProviderEditorOpen] = useState(false);
   const [provider, setProvider] = useState(() => savedSettingsRef.current.provider || { baseUrl: "", hasApiKey: false, source: "env" });
-  const [providerDraft, setProviderDraft] = useState(() => ({
-    baseUrl: savedSettingsRef.current.provider?.baseUrl || "",
-    apiKey: "",
-  }));
+  const [providerProfiles, setProviderProfiles] = useState(() => savedSettingsRef.current.providerProfiles || []);
+  const [providerDraft, setProviderDraft] = useState(() => createProviderDraft(savedSettingsRef.current.provider));
   const [providerBusy, setProviderBusy] = useState("");
   const [providerResult, setProviderResult] = useState(null);
   const [attentionPending, setAttentionPending] = useState(false);
@@ -2188,22 +2295,39 @@ function App({ initialSettings }) {
     }
   }
 
+  function applyProviderPayload(data, { resetDraft = true } = {}) {
+    if (data.provider) {
+      setProvider(data.provider);
+      if (resetDraft) {
+        setProviderDraft(createProviderDraft(data.provider));
+      }
+    }
+    if (Array.isArray(data.profiles)) {
+      setProviderProfiles(data.profiles);
+    } else {
+      const fallbackProfile = providerProfileFromProvider(data.provider);
+      if (fallbackProfile) {
+        setProviderProfiles([fallbackProfile]);
+      }
+    }
+  }
+
   async function loadProviderSettings() {
     try {
       const data = await requestJson("/api/provider-settings");
       if (!data.provider) return;
-      setProvider(data.provider);
-      setProviderDraft((current) => ({
-        ...current,
-        baseUrl: current.baseUrl || data.provider.baseUrl || "",
-      }));
+      applyProviderPayload(data);
     } catch {
       // Provider settings can still be entered manually if loading fails.
     }
   }
 
+  function providerDraftHasSavedKey() {
+    return Boolean(providerDraft.id && providerProfiles.some((profile) => profile.id === providerDraft.id && profile.hasApiKey));
+  }
+
   async function verifyProviderSettings() {
-    if (!providerDraft.baseUrl.trim() || !providerDraft.apiKey.trim()) {
+    if (!providerDraft.baseUrl.trim() || (!providerDraft.apiKey.trim() && !providerDraftHasSavedKey())) {
       setProviderResult({ tone: "error", message: "请先填写 Base URL 和 Key。" });
       return;
     }
@@ -2229,7 +2353,7 @@ function App({ initialSettings }) {
   }
 
   async function saveProviderSettings() {
-    if (!providerDraft.baseUrl.trim() || !providerDraft.apiKey.trim()) {
+    if (!providerDraft.baseUrl.trim() || (!providerDraft.apiKey.trim() && !providerDraftHasSavedKey())) {
       setProviderResult({ tone: "error", message: "请先填写 Base URL 和 Key。" });
       return;
     }
@@ -2244,13 +2368,72 @@ function App({ initialSettings }) {
         body: JSON.stringify(providerDraft),
       });
       if (data.provider) {
-        setProvider(data.provider);
-        setProviderDraft({ baseUrl: data.provider.baseUrl || providerDraft.baseUrl, apiKey: "" });
+        applyProviderPayload(data);
       }
       setProviderResult({ tone: "success", message: "已保存。后续生成会使用这组配置。" });
+      setProviderEditorOpen(false);
       showToast("模型设置已保存。", "success");
     } catch (error) {
       const message = error.message || "保存失败。";
+      setProviderResult({ tone: "error", message });
+      showToast(message, "error", 2600);
+    } finally {
+      setProviderBusy("");
+    }
+  }
+
+  async function useProviderProfile(id) {
+    setProviderResult(null);
+    const profile = providerProfiles.find((item) => item.id === id);
+    if (!profile) return;
+    setProviderBusy("select");
+    try {
+      const data = await requestJson("/api/provider-settings/select", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ id }),
+      });
+      applyProviderPayload(data);
+      showToast("已切换模型 Key。", "success");
+    } catch (error) {
+      const message = error.message || "切换失败。";
+      setProviderResult({ tone: "error", message });
+      showToast(message, "error", 2600);
+    } finally {
+      setProviderBusy("");
+    }
+  }
+
+  function createNewProviderProfile() {
+    setProviderResult(null);
+    setProviderDraft(createProviderDraft());
+    setProviderEditorOpen(true);
+  }
+
+  function editProviderProfile(profile) {
+    setProviderResult(null);
+    setProviderDraft(createProviderDraft(profile));
+    setProviderEditorOpen(true);
+  }
+
+  async function deleteProviderProfile(id) {
+    if (!id) return;
+    setProviderBusy("delete");
+    setProviderResult(null);
+    try {
+      const data = await requestJson(`/api/provider-settings/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
+      applyProviderPayload(data);
+      if (providerDraft.id === id) {
+        setProviderEditorOpen(false);
+      }
+      setProviderResult({ tone: "success", message: "已删除。" });
+      showToast("模型 Key 已删除。", "success");
+    } catch (error) {
+      const message = error.message || "删除失败。";
       setProviderResult({ tone: "error", message });
       showToast(message, "error", 2600);
     } finally {
@@ -3017,12 +3200,19 @@ function App({ initialSettings }) {
       )}
       <ProviderSettingsDialog
         open={providerOpen}
+        editorOpen={providerEditorOpen}
         provider={provider}
+        profiles={providerProfiles}
         draft={providerDraft}
         busy={providerBusy}
         result={providerResult}
         onOpenChange={setProviderOpen}
+        onEditorOpenChange={setProviderEditorOpen}
         onDraftChange={setProviderDraft}
+        onUseProfile={useProviderProfile}
+        onEdit={editProviderProfile}
+        onNew={createNewProviderProfile}
+        onDelete={deleteProviderProfile}
         onVerify={verifyProviderSettings}
         onSave={saveProviderSettings}
       />
@@ -3044,6 +3234,7 @@ async function bootstrap() {
             ...data.settings.config,
           },
           provider: data.settings.provider,
+          providerProfiles: data.settings.profiles || data.settings.providerProfiles || [],
           source: "server",
         };
       }
@@ -3058,6 +3249,7 @@ async function bootstrap() {
       initialSettings = {
         ...initialSettings,
         provider: data.provider,
+        providerProfiles: data.profiles || [],
       };
     }
   } catch {
