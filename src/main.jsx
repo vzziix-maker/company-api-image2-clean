@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { AlertCircleIcon, ArrowUpIcon, SettingsIcon } from "lucide-react";
+import { AlertCircleIcon, ArrowUpIcon, EyeIcon, EyeOffIcon, SettingsIcon } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -702,112 +702,138 @@ function ProviderSettingsDialog({
   const draftProfile = profiles.find((profile) => profile.id === draft.id);
   const hasSavedKey = Boolean(draftProfile?.hasApiKey);
   const isEditing = Boolean(draft.id);
+  const [keyVisible, setKeyVisible] = useState(false);
+
+  useEffect(() => {
+    if (!editorOpen) {
+      setKeyVisible(false);
+    }
+  }, [editorOpen]);
+
+  function handleOpenChange(nextOpen) {
+    if (!nextOpen && editorOpen) {
+      onEditorOpenChange(false);
+      return;
+    }
+    onOpenChange(nextOpen);
+    if (!nextOpen) {
+      onEditorOpenChange(false);
+    }
+  }
 
   return (
-    <>
-      <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="provider-dialog">
-          <DialogHeader>
-            <DialogTitle>模型设置</DialogTitle>
-            <DialogDescription>管理兼容 OpenAI 的 Base URL 和 Key，用于调用 gpt-image-2。</DialogDescription>
-          </DialogHeader>
+    <Dialog open={open || editorOpen} onOpenChange={handleOpenChange}>
+      <DialogContent className="provider-dialog">
+        <DialogHeader>
+          <DialogTitle>{editorOpen ? (isEditing ? "修改 Key" : "新增 Key") : "模型设置"}</DialogTitle>
+          <DialogDescription>
+            {editorOpen
+              ? isEditing
+                ? "Key 留空会保留原 Key；重新填写则替换。"
+                : "填写兼容 OpenAI 的 Base URL 和 Key。"
+              : "管理兼容 OpenAI 的 Base URL 和 Key，用于调用 gpt-image-2。"}
+          </DialogDescription>
+        </DialogHeader>
 
-          <div className="provider-list">
-            {profiles.length ? (
-              profiles.map((profile) => {
-                const active = provider?.id === profile.id;
-                return (
-                  <div className="provider-list-item" key={profile.id}>
-                    <button className="provider-list-main" type="button" onClick={() => onUseProfile(profile.id)}>
-                      <span className="provider-list-title">
-                        {profile.name || profile.baseUrl}
-                        {active && <Badge variant="secondary">当前</Badge>}
-                      </span>
-                      <span className="provider-list-url">{profile.baseUrl}</span>
-                    </button>
-                    <div className="provider-list-actions">
-                      {!active && (
-                        <Button variant="outline" size="sm" type="button" disabled={busy === "select"} onClick={() => onUseProfile(profile.id)}>
-                          使用
-                        </Button>
-                      )}
-                      <Button variant="outline" size="sm" type="button" onClick={() => onEdit(profile)}>
-                        修改
-                      </Button>
-                      <Button variant="outline" size="sm" type="button" disabled={busy === "delete"} onClick={() => onDelete(profile.id)}>
-                        删除
-                      </Button>
-                    </div>
-                  </div>
-                );
-              })
-            ) : (
-              <div className="provider-empty">
-                <p>还没有保存的 Key。</p>
-                <span>新增后可在这里切换、修改和删除。</span>
-              </div>
-            )}
-          </div>
-
-          {result?.message && <p className={cn("provider-result", result.tone === "error" && "is-error")}>{result.message}</p>}
-
-          <DialogFooter>
-            <Button type="button" onClick={onNew}>
-              新增 Key
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={editorOpen} onOpenChange={onEditorOpenChange}>
-        <DialogContent className="provider-dialog">
-          <DialogHeader>
-            <DialogTitle>{isEditing ? "修改 Key" : "新增 Key"}</DialogTitle>
-            <DialogDescription>{isEditing ? "Key 留空会保留原 Key；重新填写则替换。" : "填写兼容 OpenAI 的 Base URL 和 Key。"}</DialogDescription>
-          </DialogHeader>
-
-          <div className="provider-form">
-            <Field label="名称">
-              <Input
-                value={draft.name}
-                onChange={(event) => onDraftChange({ ...draft, name: event.target.value })}
-                placeholder="例如：公司 Key"
-              />
-            </Field>
-            <Field label="Base URL">
-              <Input
-                value={draft.baseUrl}
-                onChange={(event) => onDraftChange({ ...draft, baseUrl: event.target.value })}
-                placeholder="https://example.com/v1"
-              />
-            </Field>
-            <Field label="Key">
-              <Input
-                type="password"
-                value={draft.apiKey}
-                onChange={(event) => onDraftChange({ ...draft, apiKey: event.target.value })}
-                placeholder={hasSavedKey ? "已保存，留空则不替换" : "sk-..."}
-              />
-            </Field>
-            <div className="provider-status">
-              <Badge variant={hasSavedKey ? "secondary" : "outline"}>{hasSavedKey ? "已保存 Key" : "未保存 Key"}</Badge>
-              {provider?.name && <Badge variant="outline">当前：{provider.name}</Badge>}
-              {provider?.baseUrl && <span>{provider.baseUrl}</span>}
+        {editorOpen ? (
+          <>
+            <div className="provider-form">
+              <Field label="名称">
+                <Input
+                  value={draft.name}
+                  onChange={(event) => onDraftChange({ ...draft, name: event.target.value })}
+                  placeholder="例如：公司 Key"
+                />
+              </Field>
+              <Field label="Base URL">
+                <Input
+                  value={draft.baseUrl}
+                  onChange={(event) => onDraftChange({ ...draft, baseUrl: event.target.value })}
+                  placeholder="https://example.com/v1"
+                />
+              </Field>
+              <Field label="Key">
+                <div className="provider-key-field">
+                  <Input
+                    type={keyVisible ? "text" : "password"}
+                    value={draft.apiKey}
+                    onChange={(event) => onDraftChange({ ...draft, apiKey: event.target.value })}
+                    placeholder={hasSavedKey ? "已保存，留空则不替换" : "sk-..."}
+                  />
+                  <Button
+                    aria-label={keyVisible ? "隐藏 Key" : "显示 Key"}
+                    className="provider-key-toggle"
+                    size="icon"
+                    type="button"
+                    variant="ghost"
+                    onClick={() => setKeyVisible((visible) => !visible)}
+                  >
+                    {keyVisible ? <EyeOffIcon /> : <EyeIcon />}
+                  </Button>
+                </div>
+              </Field>
+              {result?.message && <p className={cn("provider-result", result.tone === "error" && "is-error")}>{result.message}</p>}
             </div>
-            {result?.message && <p className={cn("provider-result", result.tone === "error" && "is-error")}>{result.message}</p>}
-          </div>
 
-          <DialogFooter>
-            <Button variant="outline" type="button" disabled={busy === "verify"} onClick={onVerify}>
-              {busy === "verify" ? "验证中..." : "验证"}
-            </Button>
-            <Button type="button" disabled={busy === "save"} onClick={onSave}>
-              {busy === "save" ? "保存中..." : "保存"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </>
+            <DialogFooter>
+              <Button variant="outline" type="button" disabled={busy === "verify"} onClick={onVerify}>
+                {busy === "verify" ? "验证中..." : "验证"}
+              </Button>
+              <Button type="button" disabled={busy === "save"} onClick={onSave}>
+                {busy === "save" ? "保存中..." : "保存"}
+              </Button>
+            </DialogFooter>
+          </>
+        ) : (
+          <>
+            <div className="provider-list">
+              {profiles.length ? (
+                profiles.map((profile) => {
+                  const active = provider?.id === profile.id;
+                  return (
+                    <div className="provider-list-item" key={profile.id}>
+                      <button className="provider-list-main" type="button" onClick={() => onUseProfile(profile.id)}>
+                        <span className="provider-list-title">
+                          {profile.name || profile.baseUrl}
+                          {active && <Badge variant="secondary">当前</Badge>}
+                        </span>
+                        <span className="provider-list-url">{profile.baseUrl}</span>
+                      </button>
+                      <div className="provider-list-actions">
+                        {!active && (
+                          <Button variant="outline" size="sm" type="button" disabled={busy === "select"} onClick={() => onUseProfile(profile.id)}>
+                            使用
+                          </Button>
+                        )}
+                        <Button variant="outline" size="sm" type="button" onClick={() => onEdit(profile)}>
+                          修改
+                        </Button>
+                        <Button variant="outline" size="sm" type="button" disabled={busy === "delete"} onClick={() => onDelete(profile.id)}>
+                          删除
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="provider-empty">
+                  <p>还没有保存的 Key。</p>
+                  <span>新增后可在这里切换、修改和删除。</span>
+                </div>
+              )}
+            </div>
+
+            {result?.message && <p className={cn("provider-result", result.tone === "error" && "is-error")}>{result.message}</p>}
+
+            <DialogFooter>
+              <Button type="button" onClick={onNew}>
+                新增 Key
+              </Button>
+            </DialogFooter>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -2412,9 +2438,22 @@ function App({ initialSettings }) {
     setProviderEditorOpen(true);
   }
 
-  function editProviderProfile(profile) {
+  async function editProviderProfile(profile) {
     setProviderResult(null);
-    setProviderDraft(createProviderDraft(profile));
+    const draft = createProviderDraft(profile);
+    if (!profile?.id) {
+      setProviderDraft(draft);
+      setProviderEditorOpen(true);
+      return;
+    }
+    try {
+      const data = await requestJson(`/api/provider-settings/${encodeURIComponent(profile.id)}/key`);
+      setProviderDraft({ ...draft, apiKey: data.apiKey || "" });
+    } catch (error) {
+      const message = error.message || "读取 Key 失败。";
+      setProviderDraft(draft);
+      showToast(message, "error", 2600);
+    }
     setProviderEditorOpen(true);
   }
 

@@ -145,6 +145,8 @@ try {
   });
   await generate();
 
+  const secondKey = await api(`/api/provider-settings/${secondId}/key`);
+
   const afterDeleteSecond = await api(`/api/provider-settings/${secondId}`, { method: "DELETE" });
   const afterDeleteLegacy = await api(`/api/provider-settings/${legacyId}`, { method: "DELETE" });
   await generate();
@@ -160,6 +162,7 @@ try {
     created.provider?.name === "备用 Key" &&
     edited.provider?.id === secondId &&
     edited.provider?.name === "重命名 Key" &&
+    secondKey.apiKey === "sk-second" &&
     afterDeleteSecond.profiles?.length === 1 &&
     afterDeleteSecond.provider?.id === legacyId &&
     afterDeleteLegacy.profiles?.length === 0 &&

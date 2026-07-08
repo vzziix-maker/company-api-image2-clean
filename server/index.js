@@ -655,6 +655,17 @@ async function deleteProviderSettings(id) {
   return publicProviderPayload(nextSettings);
 }
 
+async function readProviderProfileKey(id) {
+  const settings = (await readSettings()) || {};
+  const { profiles } = getProviderProfileState(settings);
+  const profileId = normalizeHistoryId(id);
+  const profile = profiles.find((item) => item.id === profileId);
+  if (!profile) {
+    throw notFoundError("Provider profile not found.");
+  }
+  return profile.apiKey;
+}
+
 async function providerDraftToConfig(provider) {
   const settings = (await readSettings()) || {};
   const { profiles } = getProviderProfileState(settings);
@@ -1273,6 +1284,15 @@ app.post("/api/provider-settings/select", async (request, response, next) => {
   try {
     const payload = await selectProviderSettings(request.body?.id);
     response.json({ ok: true, ...payload });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/provider-settings/:id/key", async (request, response, next) => {
+  try {
+    const apiKey = await readProviderProfileKey(request.params.id);
+    response.json({ ok: true, apiKey });
   } catch (error) {
     next(error);
   }
