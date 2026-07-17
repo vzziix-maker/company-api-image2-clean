@@ -14,7 +14,7 @@ import {
   updateCompletionReminderBatch,
 } from "../src/notification-reminders.js";
 
-assert.equal(DEFAULT_DOCUMENT_TITLE, "image2生图");
+assert.equal(DEFAULT_DOCUMENT_TITLE, "Jomage2");
 assert.equal(ATTENTION_DOCUMENT_TITLE, "🤡");
 assert.equal(EMPTY_ATTENTION_DOCUMENT_TITLE, "\u200B");
 assert.notEqual(EMPTY_ATTENTION_DOCUMENT_TITLE.trim(), "");

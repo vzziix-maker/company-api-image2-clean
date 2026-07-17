@@ -1,4 +1,4 @@
-export const DEFAULT_DOCUMENT_TITLE = "image2生图";
+export const DEFAULT_DOCUMENT_TITLE = "Jomage2";
 export const ATTENTION_DOCUMENT_TITLE = "🤡";
 export const EMPTY_ATTENTION_DOCUMENT_TITLE = "\u200B";
 export const TITLE_FRAME_ANCHOR = "\u2060";

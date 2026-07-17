@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "predev": "node scripts/clear-dev-ports.js",
     "dev": "concurrently --kill-others --success first \"npm run dev:server\" \"npm run dev:client\"",
     "dev:client": "vite --host 127.0.0.1 --strictPort",
     "dev:server": "node --watch server/index.js",

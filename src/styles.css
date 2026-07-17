@@ -168,7 +168,29 @@
   overflow: hidden;
   background: var(--background);
   color: var(--foreground);
-  padding: 24px;
+  padding: 56px 24px 24px;
+}
+
+.app-brand {
+  position: absolute;
+  top: 12px;
+  left: 24px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  color: var(--foreground);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.app-brand img {
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  object-fit: cover;
 }
 
 .provider-settings-button {

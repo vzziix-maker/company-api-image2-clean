@@ -3069,6 +3069,10 @@ function App({ initialSettings }) {
     <TooltipProvider>
       <Toaster position="top-center" />
       <main className="app-shell dark">
+      <div className="app-brand" aria-label="Jomage2">
+        <img src="/jomage2-logo.png" alt="" />
+        <span>Jomage2</span>
+      </div>
       <Button
         className="provider-settings-button"
         variant="outline"
