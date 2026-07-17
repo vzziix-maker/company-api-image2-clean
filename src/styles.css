@@ -814,6 +814,13 @@
   text-align: center;
 }
 
+.empty-state-logo {
+  width: min(220px, 70%);
+  max-height: 34vh;
+  aspect-ratio: 1;
+  object-fit: contain;
+}
+
 .empty-state [data-slot="card-header"] {
   width: 100%;
   max-width: 420px;

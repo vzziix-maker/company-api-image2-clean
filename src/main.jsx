@@ -13,11 +13,10 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Toaster } from "@/components/ui/sonner";
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -1335,13 +1334,11 @@ function ImageResults({ images, outputFormat, generatedAt, loading, elapsedSecon
   if (loading) {
     return (
       <Card className="empty-state" size="sm">
+        <img className="empty-state-logo" src="/jomage2-logo.png" alt="Jomage2" />
         <CardHeader>
           <CardTitle>生成中</CardTitle>
           <CardDescription>{elapsedSeconds ? `请求进行中... ${elapsedSeconds}s` : "请求进行中..."}</CardDescription>
         </CardHeader>
-        <CardContent>
-          <Skeleton className="mx-auto h-24 w-24 rounded-lg" />
-        </CardContent>
       </Card>
     );
   }
@@ -1349,6 +1346,7 @@ function ImageResults({ images, outputFormat, generatedAt, loading, elapsedSecon
   if (!images.length) {
     return (
       <Card className="empty-state" size="sm">
+        <img className="empty-state-logo" src="/jomage2-logo.png" alt="Jomage2" />
         <CardHeader>
           <CardTitle>结果预览</CardTitle>
           <CardDescription>生成或编辑成功后，图片会显示在这里。</CardDescription>
