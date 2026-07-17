@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +7,18 @@ import { join } from "node:path";
 const mockPort = Number(process.env.MOCK_IMAGE_API_PORT || 19888);
 const appPort = Number(process.env.MOCK_APP_PORT || 19889);
 const appDataDir = await mkdtemp(join(tmpdir(), "image2-persistent-history-"));
+await writeFile(
+  join(appDataDir, "settings.json"),
+  JSON.stringify({
+    activeProviderId: "test-provider",
+    providerProfiles: [{
+      id: "test-provider",
+      name: "测试 Key",
+      baseUrl: `http://localhost:${mockPort}/v1`,
+      apiKey: "test-key",
+    }],
+  }),
+);
 const capturedRequests = [];
 
 function readBody(request) {

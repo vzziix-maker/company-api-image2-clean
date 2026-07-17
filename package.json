@@ -21,6 +21,7 @@
     "test:reference-draft": "node scripts/test-reference-image-draft-storage.js",
     "test:rate-limit": "node scripts/test-rate-limit.js",
     "test:provider-profiles": "node scripts/test-provider-profiles.js",
+    "test:ai-platform": "node scripts/test-ai-platform.js",
     "test:submit-errors": "node scripts/test-submit-error-copy.js",
     "test:security": "node scripts/test-security-controls.js"
   },

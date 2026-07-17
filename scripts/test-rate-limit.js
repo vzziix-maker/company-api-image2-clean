@@ -1,12 +1,24 @@
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const mockPort = 18878;
 const appPort = 18879;
 const appDataDir = await mkdtemp(join(tmpdir(), "image2-rate-limit-"));
+await writeFile(
+  join(appDataDir, "settings.json"),
+  JSON.stringify({
+    activeProviderId: "test-provider",
+    providerProfiles: [{
+      id: "test-provider",
+      name: "测试 Key",
+      baseUrl: `http://localhost:${mockPort}/v1`,
+      apiKey: "test-key",
+    }],
+  }),
+);
 const retryAfter = 24;
 const message =
   "Your requests to gpt-image-2 for gpt-image-2 in East US 2 have exceeded the call rate limit for your current OpenAI S0 pricing tier. This request was for ImageGenerations_Create under Azure OpenAI API version 2025-04-01-preview. Please retry after 24 seconds.";

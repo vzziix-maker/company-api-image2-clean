@@ -1,11 +1,12 @@
 import "../server/env.js";
 
 const port = Number(process.env.PORT || 43287);
-const expected = {
-  format: "jpeg",
-  width: 1024,
-  height: 688,
-};
+const appBaseUrl = `http://127.0.0.1:${port}`;
+const health = await (await fetch(`${appBaseUrl}/api/health`)).json();
+const usesAiPlatform = health.provider?.adapter === "ai-platform";
+const expected = usesAiPlatform
+  ? { format: "png", aspectRatio: "3:2" }
+  : { format: "jpeg", width: 1024, height: 688 };
 
 function readPng(buffer) {
   if (buffer.toString("ascii", 1, 4) !== "PNG") return null;
@@ -42,7 +43,7 @@ function readImage(buffer) {
   return readPng(buffer) || readJpeg(buffer) || { format: "unknown", width: 0, height: 0 };
 }
 
-const response = await fetch(`http://127.0.0.1:${port}/api/generate`, {
+const response = await fetch(`${appBaseUrl}/api/generate`, {
   method: "POST",
   headers: {
     "Content-Type": "application/json",
@@ -68,16 +69,24 @@ if (!response.ok) {
 }
 
 const first = data.images?.[0];
-const buffer = Buffer.from(first?.b64_json || "", "base64");
+const buffer = first?.b64_json
+  ? Buffer.from(first.b64_json, "base64")
+  : first?.url
+    ? Buffer.from(await (await fetch(new URL(first.url, appBaseUrl))).arrayBuffer())
+    : Buffer.alloc(0);
 const actual = readImage(buffer);
-const ok = actual.format === expected.format && actual.width === expected.width && actual.height === expected.height;
+const actualRatio = actual.height ? actual.width / actual.height : 0;
+const ok = usesAiPlatform
+  ? actual.format === expected.format && Math.abs(actualRatio - 3 / 2) < 0.04
+  : actual.format === expected.format && actual.width === expected.width && actual.height === expected.height;
 
 console.log(JSON.stringify({
   ok,
   expected,
   actual,
   imageCount: data.images?.length || 0,
-  resolvedSize: data.raw?.data?.[0] ? `${actual.width}x${actual.height}` : null,
+  resolvedSize: actual.width && actual.height ? `${actual.width}x${actual.height}` : null,
+  provider: health.provider?.name,
   historyId: data.historyId,
 }, null, 2));
 

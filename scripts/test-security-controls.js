@@ -67,6 +67,7 @@ await writeFile(
   join(appDataDir, "settings.json"),
   JSON.stringify(
     {
+      activeProviderId: "security-provider",
       provider: {
         baseUrl: "https://api.example.com/v1",
         apiKey: "sk-fake-security-key",

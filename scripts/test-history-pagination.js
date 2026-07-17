@@ -1,12 +1,37 @@
+import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { mergeRefreshedHistory } from "../src/history-refresh.js";
 
 const mockPort = Number(process.env.MOCK_IMAGE_API_PORT || 19898);
 const appPort = Number(process.env.MOCK_APP_PORT || 19899);
 const appDataDir = await mkdtemp(join(tmpdir(), "image2-history-pagination-"));
+
+const loadedHistory = Array.from({ length: 60 }, (_, index) => ({ id: `item-${index + 1}`, version: 1 }));
+const refreshedFirstPage = [
+  { id: "new-running-item", version: 1 },
+  ...loadedHistory.slice(0, 29).map((item) => ({ ...item, version: 2 })),
+];
+const mergedRefresh = mergeRefreshedHistory(loadedHistory, refreshedFirstPage, 61);
+assert.equal(mergedRefresh.length, 61);
+assert.equal(mergedRefresh[0].id, "new-running-item");
+assert.equal(mergedRefresh.find((item) => item.id === "item-1")?.version, 2);
+assert.equal(mergedRefresh.at(-1)?.id, "item-60");
+await writeFile(
+  join(appDataDir, "settings.json"),
+  JSON.stringify({
+    activeProviderId: "test-provider",
+    providerProfiles: [{
+      id: "test-provider",
+      name: "测试 Key",
+      baseUrl: `http://localhost:${mockPort}/v1`,
+      apiKey: "test-key",
+    }],
+  }),
+);
 
 function readBody(request) {
   return new Promise((resolve, reject) => {

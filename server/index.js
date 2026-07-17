@@ -9,6 +9,14 @@ import { extname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import multer from "multer";
 import { Agent, interceptors } from "undici";
+import {
+  AI_PLATFORM_PROVIDER,
+  AI_PLATFORM_PROVIDER_ID,
+  buildAiPlatformExt,
+  createAiPlatformTasks,
+  pollAiPlatformTasks,
+  uploadLitterboxReferences,
+} from "./ai-platform.js";
 
 const app = express();
 const MAX_EDIT_IMAGES = 5;
@@ -85,6 +93,10 @@ const upstreamDispatcher = new Agent({
     lookup: secureDnsLookup,
   }),
 ]);
+const directDispatcher = new Agent({
+  headersTimeout: UPSTREAM_HEADERS_TIMEOUT_MS,
+  bodyTimeout: UPSTREAM_BODY_TIMEOUT_MS,
+});
 let historyWriteQueue = Promise.resolve();
 
 app.use((request, response, next) => {
@@ -496,19 +508,20 @@ function getSavedProviderProfiles(settings = {}) {
 function getProviderProfileState(settings = {}) {
   const profiles = getSavedProviderProfiles(settings);
   const requestedActiveId = normalizeHistoryId(settings.activeProviderId);
-  const active = profiles.find((profile) => profile.id === requestedActiveId) || profiles[0] || null;
+  const selectedProfile = profiles.find((profile) => profile.id === requestedActiveId);
+  const active = requestedActiveId === AI_PLATFORM_PROVIDER_ID || !selectedProfile ? AI_PLATFORM_PROVIDER : selectedProfile;
   return {
     profiles,
     active,
-    activeProviderId: active?.id || "",
+    activeProviderId: active.id,
   };
 }
 
 async function readProviderSettings() {
   const settings = await readSettings();
   const { active } = getProviderProfileState(settings || {});
+  if (active.id === AI_PLATFORM_PROVIDER_ID) return AI_PLATFORM_PROVIDER;
   const fallback = getDefaultProviderSettings();
-  if (!active) return fallback;
   return {
     ...active,
     baseUrl: active.baseUrl || fallback.baseUrl,
@@ -524,6 +537,8 @@ function publicProviderSettings(provider) {
     baseUrl: provider.baseUrl,
     hasApiKey: Boolean(provider.apiKey),
     source: provider.source,
+    adapter: provider.adapter || "openai-compatible",
+    builtIn: Boolean(provider.builtIn),
     savedAt: provider.savedAt || null,
     updatedAt: provider.updatedAt || null,
   };
@@ -535,7 +550,9 @@ function publicProviderProfile(profile, activeProviderId) {
     name: profile.name,
     baseUrl: profile.baseUrl,
     hasApiKey: Boolean(profile.apiKey),
-    source: "saved",
+    source: profile.source || "saved",
+    adapter: profile.adapter || "openai-compatible",
+    builtIn: Boolean(profile.builtIn),
     savedAt: profile.savedAt || null,
     updatedAt: profile.updatedAt || null,
     active: profile.id === activeProviderId,
@@ -544,10 +561,10 @@ function publicProviderProfile(profile, activeProviderId) {
 
 function publicProviderPayload(settings = {}) {
   const { profiles, active, activeProviderId } = getProviderProfileState(settings);
-  const provider = active ? { ...active, source: "saved" } : getDefaultProviderSettings();
+  const provider = active.id === AI_PLATFORM_PROVIDER_ID ? active : { ...active, source: "saved" };
   return {
     provider: publicProviderSettings(provider),
-    profiles: profiles.map((profile) => publicProviderProfile(profile, activeProviderId)),
+    profiles: [AI_PLATFORM_PROVIDER, ...profiles].map((profile) => publicProviderProfile(profile, activeProviderId)),
     activeProviderId,
   };
 }
@@ -563,11 +580,12 @@ function publicSettings(settings) {
 }
 
 async function writeProviderProfileSettings(settings, profiles, activeProviderId) {
-  const active = profiles.find((profile) => profile.id === activeProviderId) || profiles[0] || null;
+  const active = profiles.find((profile) => profile.id === activeProviderId) || null;
+  const selectedId = active?.id || AI_PLATFORM_PROVIDER_ID;
   const nextSettings = {
     ...settings,
     providerProfiles: profiles,
-    activeProviderId: active?.id || "",
+    activeProviderId: selectedId,
   };
   if (active) {
     nextSettings.provider = {
@@ -592,6 +610,11 @@ async function updateProviderSettings(provider) {
   const settings = (await readSettings()) || {};
   const { profiles } = getProviderProfileState(settings);
   const requestedId = normalizeHistoryId(provider?.id);
+  if (requestedId === AI_PLATFORM_PROVIDER_ID) {
+    const error = new Error("AI中台是内置途径，不能修改。");
+    error.status = 400;
+    throw error;
+  }
   const existingIndex = requestedId ? profiles.findIndex((profile) => profile.id === requestedId) : -1;
   if (requestedId && existingIndex < 0) {
     throw notFoundError("Provider profile not found.");
@@ -635,7 +658,7 @@ async function selectProviderSettings(id) {
   const settings = (await readSettings()) || {};
   const { profiles } = getProviderProfileState(settings);
   const profileId = normalizeHistoryId(id);
-  if (!profileId || !profiles.some((profile) => profile.id === profileId)) {
+  if (!profileId || (profileId !== AI_PLATFORM_PROVIDER_ID && !profiles.some((profile) => profile.id === profileId))) {
     throw notFoundError("Provider profile not found.");
   }
   const nextSettings = await writeProviderProfileSettings(settings, profiles, profileId);
@@ -646,11 +669,16 @@ async function deleteProviderSettings(id) {
   const settings = (await readSettings()) || {};
   const { profiles, activeProviderId } = getProviderProfileState(settings);
   const profileId = normalizeHistoryId(id);
+  if (profileId === AI_PLATFORM_PROVIDER_ID) {
+    const error = new Error("AI中台是内置途径，不能删除。");
+    error.status = 400;
+    throw error;
+  }
   const nextProfiles = profiles.filter((profile) => profile.id !== profileId);
   if (!profileId || nextProfiles.length === profiles.length) {
     throw notFoundError("Provider profile not found.");
   }
-  const nextActiveId = activeProviderId === profileId ? nextProfiles[0]?.id || "" : activeProviderId;
+  const nextActiveId = activeProviderId === profileId ? AI_PLATFORM_PROVIDER_ID : activeProviderId;
   const nextSettings = await writeProviderProfileSettings(settings, nextProfiles, nextActiveId);
   return publicProviderPayload(nextSettings);
 }
@@ -659,6 +687,11 @@ async function readProviderProfileKey(id) {
   const settings = (await readSettings()) || {};
   const { profiles } = getProviderProfileState(settings);
   const profileId = normalizeHistoryId(id);
+  if (profileId === AI_PLATFORM_PROVIDER_ID) {
+    const error = new Error("AI中台不使用 Key。");
+    error.status = 400;
+    throw error;
+  }
   const profile = profiles.find((item) => item.id === profileId);
   if (!profile) {
     throw notFoundError("Provider profile not found.");
@@ -1194,6 +1227,138 @@ async function fetchDeer(url, options, externalSignal, baseUrl = "") {
   }
 }
 
+async function downloadAiPlatformImages(urls, signal) {
+  const images = await Promise.all(
+    urls.map(async (url, index) => {
+      const response = await fetch(url, {
+        signal,
+        dispatcher: directDispatcher,
+        redirect: "error",
+      });
+      if (!response.ok) {
+        const error = new Error(`生成结果下载失败（HTTP ${response.status}）。`);
+        error.status = 502;
+        error.code = "ai_platform_result_download_failed";
+        throw error;
+      }
+      const contentType = response.headers.get("content-type") || "";
+      if (!contentType.startsWith("image/")) {
+        const error = new Error("生成结果地址没有返回图片。");
+        error.status = 502;
+        error.code = "ai_platform_result_download_failed";
+        throw error;
+      }
+      const contentLength = Number(response.headers.get("content-length") || 0);
+      if (contentLength > 25 * 1024 * 1024) {
+        const error = new Error("生成结果图片超过 25MB，已停止下载。");
+        error.status = 502;
+        error.code = "ai_platform_result_download_failed";
+        throw error;
+      }
+      const buffer = Buffer.from(await response.arrayBuffer());
+      if (buffer.length > 25 * 1024 * 1024) {
+        const error = new Error("生成结果图片超过 25MB，已停止保存。");
+        error.status = 502;
+        error.code = "ai_platform_result_download_failed";
+        throw error;
+      }
+      return {
+        index,
+        b64_json: buffer.toString("base64"),
+      };
+    }),
+  );
+  return saveGeneratedImages(images, "png", "result");
+}
+
+async function executeAiPlatformJob({ historyId, payload, sourceBody, referenceFiles = [], taskIds = [], controller }) {
+  const ext = buildAiPlatformExt(payload, sourceBody);
+  let upstreamTaskIds = taskIds.map(String).filter(Boolean);
+  if (!upstreamTaskIds.length) {
+    const referenceUrls = referenceFiles.length
+      ? await uploadLitterboxReferences(referenceFiles, {
+          signal: controller.signal,
+          dispatcher: directDispatcher,
+        })
+      : [];
+    upstreamTaskIds = await createAiPlatformTasks({
+      ext,
+      count: payload.n,
+      referenceUrls,
+      signal: controller.signal,
+      dispatcher: directDispatcher,
+    });
+    await updateHistory(historyId, (item) => ({
+      ...item,
+      upstreamTaskIds,
+    }));
+  }
+
+  const result = await pollAiPlatformTasks(upstreamTaskIds, {
+    signal: controller.signal,
+    dispatcher: directDispatcher,
+  });
+  const historyImages = await downloadAiPlatformImages(result.urls, controller.signal);
+  const completedAt = new Date().toISOString();
+  const updated = await updateHistory(historyId, (item) => ({
+    ...item,
+    status: "success",
+    completedAt,
+    durationMs: item.startedAt ? Date.now() - new Date(item.startedAt).getTime() : item.durationMs,
+    images: historyImages,
+    usage: result.useTokens == null ? undefined : { total_tokens: result.useTokens },
+    error: null,
+  }));
+  return {
+    created: Math.floor(new Date(completedAt).getTime() / 1000),
+    images: historyImages,
+    usage: updated?.usage,
+    historyId,
+  };
+}
+
+async function failAiPlatformHistory(historyId, error) {
+  const item = (await readHistory()).find((entry) => entry.id === historyId);
+  if (!item || item.status !== "running") return;
+  await updateHistory(historyId, (current) => ({
+    ...current,
+    status: isCanceledJobError(error) ? "canceled" : "failed",
+    completedAt: new Date().toISOString(),
+    durationMs: current.startedAt ? Date.now() - new Date(current.startedAt).getTime() : current.durationMs,
+    error: isCanceledJobError(error)
+      ? null
+      : {
+          message: error.message,
+          status: error.status || 500,
+          code: error.code,
+          details: error.details,
+        },
+  }));
+}
+
+async function resumeAiPlatformJobs() {
+  const items = await readHistory();
+  items
+    .filter((item) => item.status === "running" && item.providerId === AI_PLATFORM_PROVIDER_ID)
+    .forEach((item) => {
+      if (!Array.isArray(item.upstreamTaskIds) || !item.upstreamTaskIds.length || !item.requestPayload) {
+        failAiPlatformHistory(item.id, new Error("服务重启时 AI中台任务尚未完成提交，请重新生成。")).catch(console.error);
+        return;
+      }
+      const controller = new AbortController();
+      activeJobs.set(item.id, { controller, mode: item.mode, providerId: AI_PLATFORM_PROVIDER_ID });
+      executeAiPlatformJob({
+        historyId: item.id,
+        payload: item.requestPayload,
+        sourceBody: item.config || {},
+        taskIds: item.upstreamTaskIds,
+        controller,
+      })
+        .catch((error) => failAiPlatformHistory(item.id, controller.signal.aborted ? canceledJobError() : error))
+        .finally(() => activeJobs.delete(item.id));
+    });
+}
+
 app.get("/api/health", async (_request, response, next) => {
   try {
     const provider = await readProviderSettings();
@@ -1407,9 +1572,16 @@ app.post("/api/generate", async (request, response, next) => {
   const controller = new AbortController();
   try {
     const provider = await readProviderSettings();
-    requireProviderConfig(provider);
-    await assertProviderBaseUrlAllowed(provider.baseUrl);
+    const usesAiPlatform = provider.adapter === "ai-platform";
+    if (!usesAiPlatform) {
+      requireProviderConfig(provider);
+      await assertProviderBaseUrlAllowed(provider.baseUrl);
+    }
     payload = buildPayload(request.body, "generate");
+    if (usesAiPlatform) {
+      payload.output_format = "png";
+      delete payload.background;
+    }
     const clientRequestId = normalizeHistoryId(request.body?.clientRequestId);
     history = await appendHistory({
       id: clientRequestId,
@@ -1420,9 +1592,21 @@ app.post("/api/generate", async (request, response, next) => {
       durationMs: 0,
       config: payloadToUiConfig(payload, request.body),
       requestPayload: payload,
+      providerId: provider.id || null,
       images: [],
     });
-    activeJobs.set(history.id, { controller, mode: "generate" });
+    activeJobs.set(history.id, { controller, mode: "generate", providerId: provider.id || null });
+
+    if (usesAiPlatform) {
+      const clientData = await executeAiPlatformJob({
+        historyId: history.id,
+        payload,
+        sourceBody: request.body,
+        controller,
+      });
+      sendJsonIfOpen(response, clientData);
+      return;
+    }
 
     const deerResponse = await fetchDeer(`${provider.baseUrl}/images/generations`, {
       method: "POST",
@@ -1445,7 +1629,8 @@ app.post("/api/generate", async (request, response, next) => {
       usage: clientData.usage,
     }));
     sendJsonIfOpen(response, { ...clientData, historyId: history.id });
-  } catch (error) {
+  } catch (caughtError) {
+    const error = controller.signal.aborted && !isCanceledJobError(caughtError) ? canceledJobError() : caughtError;
     if (history) {
       try {
         await updateHistory(history.id, (item) => ({
@@ -1493,8 +1678,11 @@ app.post(
     const controller = new AbortController();
     try {
       const provider = await readProviderSettings();
-      requireProviderConfig(provider);
-      await assertProviderBaseUrlAllowed(provider.baseUrl);
+      const usesAiPlatform = provider.adapter === "ai-platform";
+      if (!usesAiPlatform) {
+        requireProviderConfig(provider);
+        await assertProviderBaseUrlAllowed(provider.baseUrl);
+      }
       images = collectEditImages(request.files);
       mask = request.files?.mask?.[0];
       if (!images.length) {
@@ -1510,6 +1698,10 @@ app.post(
 
       const referenceDimensions = getImageDimensions(images[0]);
       payload = buildPayload(request.body, "edit", { referenceDimensions });
+      if (usesAiPlatform) {
+        payload.output_format = "png";
+        delete payload.background;
+      }
       const formData = new FormData();
       formData.set("model", payload.model);
       formData.set("prompt", payload.prompt);
@@ -1538,13 +1730,26 @@ app.post(
         durationMs: 0,
         config: payloadToUiConfig(payload, request.body),
         requestPayload: payload,
+        providerId: provider.id || null,
         source: {
           images: sourceImages,
           mask: sourceMask,
         },
         images: [],
       });
-      activeJobs.set(history.id, { controller, mode: "edit" });
+      activeJobs.set(history.id, { controller, mode: "edit", providerId: provider.id || null });
+
+      if (usesAiPlatform) {
+        const clientData = await executeAiPlatformJob({
+          historyId: history.id,
+          payload,
+          sourceBody: request.body,
+          referenceFiles: images,
+          controller,
+        });
+        sendJsonIfOpen(response, clientData);
+        return;
+      }
 
       const deerResponse = await fetchDeer(`${provider.baseUrl}/images/edits`, {
         method: "POST",
@@ -1566,7 +1771,8 @@ app.post(
         usage: clientData.usage,
       }));
       sendJsonIfOpen(response, { ...clientData, historyId: history.id });
-    } catch (error) {
+    } catch (caughtError) {
+      const error = controller.signal.aborted && !isCanceledJobError(caughtError) ? canceledJobError() : caughtError;
       if (history) {
         try {
           await updateHistory(history.id, (item) => ({
@@ -1619,4 +1825,7 @@ app.use((error, _request, response, _next) => {
 
 app.listen(PORT, HOST, () => {
   console.log(`Image API server listening on http://${HOST}:${PORT}`);
+  resumeAiPlatformJobs().catch((error) => {
+    console.error("Failed to resume AI platform jobs:", error);
+  });
 });

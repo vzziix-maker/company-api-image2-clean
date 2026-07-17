@@ -106,7 +106,8 @@ try {
 
   const initial = await api("/api/provider-settings");
   const initialText = JSON.stringify(initial);
-  const legacyId = initial.profiles?.[0]?.id;
+  const builtinId = initial.profiles?.find((profile) => profile.builtIn)?.id;
+  const legacyId = initial.profiles?.find((profile) => !profile.builtIn)?.id;
 
   const created = await api("/api/provider-settings", {
     method: "PUT",
@@ -149,28 +150,27 @@ try {
 
   const afterDeleteSecond = await api(`/api/provider-settings/${secondId}`, { method: "DELETE" });
   const afterDeleteLegacy = await api(`/api/provider-settings/${legacyId}`, { method: "DELETE" });
-  await generate();
 
   const responseText = JSON.stringify([initial, created, edited, afterDeleteSecond, afterDeleteLegacy]);
   const ok =
-    initial.profiles?.length === 1 &&
-    initial.provider?.id === legacyId &&
-    initial.provider?.hasApiKey === true &&
+    initial.profiles?.length === 2 &&
+    initial.provider?.id === builtinId &&
+    initial.provider?.builtIn === true &&
+    initial.provider?.hasApiKey === false &&
     !initialText.includes("sk-legacy") &&
-    created.profiles?.length === 2 &&
+    created.profiles?.length === 3 &&
     created.provider?.id === secondId &&
     created.provider?.name === "备用 Key" &&
     edited.provider?.id === secondId &&
     edited.provider?.name === "重命名 Key" &&
     secondKey.apiKey === "sk-second" &&
-    afterDeleteSecond.profiles?.length === 1 &&
-    afterDeleteSecond.provider?.id === legacyId &&
-    afterDeleteLegacy.profiles?.length === 0 &&
-    afterDeleteLegacy.provider?.source === "env" &&
-    upstreamAuthHeaders.at(-4) === "Bearer sk-legacy" &&
-    upstreamAuthHeaders.at(-3) === "Bearer sk-second" &&
+    afterDeleteSecond.profiles?.length === 2 &&
+    afterDeleteSecond.provider?.id === builtinId &&
+    afterDeleteLegacy.profiles?.length === 1 &&
+    afterDeleteLegacy.provider?.id === builtinId &&
+    upstreamAuthHeaders.at(-3) === "Bearer sk-legacy" &&
     upstreamAuthHeaders.at(-2) === "Bearer sk-second" &&
-    upstreamAuthHeaders.at(-1) === "Bearer sk-env" &&
+    upstreamAuthHeaders.at(-1) === "Bearer sk-second" &&
     !responseText.includes("sk-legacy") &&
     !responseText.includes("sk-second") &&
     !responseText.includes("sk-env");
@@ -182,7 +182,7 @@ try {
         profileCountAfterCreate: created.profiles?.length,
         activeAfterEdit: edited.provider?.name,
         activeAfterDelete: afterDeleteSecond.provider?.id,
-        sourceAfterDeletingAll: afterDeleteLegacy.provider?.source,
+        providerAfterDeletingAll: afterDeleteLegacy.provider?.name,
         upstreamAuthHeaders,
       },
       null,

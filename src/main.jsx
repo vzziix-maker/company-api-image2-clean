@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { AlertCircleIcon, ArrowUpIcon, EyeIcon, EyeOffIcon, SettingsIcon } from "lucide-react";
 import {
@@ -25,6 +25,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { createImageDownloadFilename } from "./download-filenames.js";
+import { mergeRefreshedHistory } from "./history-refresh.js";
 import {
   ATTENTION_DOCUMENT_TITLE,
   ATTENTION_DOCUMENT_TITLE_FRAMES,
@@ -731,7 +732,7 @@ function ProviderSettingsDialog({
               ? isEditing
                 ? "Key 留空会保留原 Key；重新填写则替换。"
                 : "填写兼容 OpenAI 的 Base URL 和 Key。"
-              : "管理兼容 OpenAI 的 Base URL 和 Key，用于调用 gpt-image-2。"}
+              : "选择内置 AI中台，或管理兼容 OpenAI 的 Base URL 和 Key。"}
           </DialogDescription>
         </DialogHeader>
 
@@ -795,9 +796,12 @@ function ProviderSettingsDialog({
                       <button className="provider-list-main" type="button" onClick={() => onUseProfile(profile.id)}>
                         <span className="provider-list-title">
                           {profile.name || profile.baseUrl}
+                          {profile.builtIn && <Badge variant="outline">内置</Badge>}
                           {active && <Badge variant="secondary">当前</Badge>}
                         </span>
-                        <span className="provider-list-url">{profile.baseUrl}</span>
+                        <span className="provider-list-url">
+                          {profile.builtIn ? "无需 Key · 参考图临时上传 12h" : profile.baseUrl}
+                        </span>
                       </button>
                       <div className="provider-list-actions">
                         {!active && (
@@ -805,12 +809,16 @@ function ProviderSettingsDialog({
                             使用
                           </Button>
                         )}
-                        <Button variant="outline" size="sm" type="button" onClick={() => onEdit(profile)}>
-                          修改
-                        </Button>
-                        <Button variant="outline" size="sm" type="button" disabled={busy === "delete"} onClick={() => onDelete(profile.id)}>
-                          删除
-                        </Button>
+                        {!profile.builtIn && (
+                          <>
+                            <Button variant="outline" size="sm" type="button" onClick={() => onEdit(profile)}>
+                              修改
+                            </Button>
+                            <Button variant="outline" size="sm" type="button" disabled={busy === "delete"} onClick={() => onDelete(profile.id)}>
+                              删除
+                            </Button>
+                          </>
+                        )}
                       </div>
                     </div>
                   );
@@ -1478,6 +1486,10 @@ function HistoryPanel({
   const [pendingDeleteId, setPendingDeleteId] = useState(null);
   const historyListRef = useRef(null);
   const loadMoreRef = useRef(null);
+  const scrollAnchorRef = useRef(null);
+  const historyLayoutKey = history
+    .map((item) => `${item.id}:${item.status}:${item.images?.length || 0}:${item.error?.message || ""}`)
+    .join("|");
 
   function confirmDelete(item) {
     setPendingDeleteId(null);
@@ -1487,6 +1499,36 @@ function HistoryPanel({
   function scrollHistoryToTop() {
     historyListRef.current?.scrollTo({ top: 0, behavior: "smooth" });
   }
+
+  function captureScrollAnchor(event) {
+    const list = event?.currentTarget || historyListRef.current;
+    if (!list || list.scrollTop <= 2) {
+      scrollAnchorRef.current = null;
+      return;
+    }
+    const listTop = list.getBoundingClientRect().top;
+    const firstVisible = Array.from(list.querySelectorAll("[data-history-id]"))
+      .find((element) => element.getBoundingClientRect().bottom > listTop);
+    if (!firstVisible) return;
+    scrollAnchorRef.current = {
+      id: firstVisible.dataset.historyId,
+      offset: firstVisible.getBoundingClientRect().top - listTop,
+    };
+  }
+
+  useLayoutEffect(() => {
+    const list = historyListRef.current;
+    const anchor = scrollAnchorRef.current;
+    if (list && anchor) {
+      const anchorElement = Array.from(list.querySelectorAll("[data-history-id]"))
+        .find((element) => element.dataset.historyId === anchor.id);
+      if (anchorElement) {
+        const nextOffset = anchorElement.getBoundingClientRect().top - list.getBoundingClientRect().top;
+        list.scrollTop += nextOffset - anchor.offset;
+      }
+    }
+    captureScrollAnchor();
+  }, [historyLayoutKey]);
 
   useEffect(() => {
     if (!hasMore || !onLoadMore) return undefined;
@@ -1525,9 +1567,9 @@ function HistoryPanel({
           </div>
         )}
 
-        <div className="history-list" ref={historyListRef}>
+        <div className="history-list" onScroll={captureScrollAnchor} ref={historyListRef}>
           {history.map((item) => (
-            <Card className="history-item" key={item.id} size="sm">
+            <Card className="history-item" data-history-id={item.id} key={item.id} size="sm">
               <div className="history-meta">
                 <Badge className="status-pill" variant={historyStatusVariant(item.status)}>
                   {historyStatusLabel(item.status)}
@@ -1677,6 +1719,7 @@ function App({ initialSettings }) {
   const [activeWorkspaceId, setActiveWorkspaceId] = useState(initialWorkspaceRef.current.id);
   const [previewWorkspaceId, setPreviewWorkspaceId] = useState(initialWorkspaceRef.current.id);
   const [history, setHistory] = useState([]);
+  const historyRef = useRef([]);
   const [historyNextCursor, setHistoryNextCursor] = useState(null);
   const [historyHasMore, setHistoryHasMore] = useState(false);
   const [historyTotal, setHistoryTotal] = useState(0);
@@ -2142,11 +2185,14 @@ function App({ initialSettings }) {
     const response = await fetch(`/api/history?limit=${HISTORY_PAGE_SIZE}`);
     const data = await readApiJson(response);
     const items = data.items || [];
+    const total = Number(data.total ?? items.length);
+    const mergedItems = mergeRefreshedHistory(historyRef.current, items, total);
     setHistoryError("");
-    setHistory(items);
-    setHistoryNextCursor(data.nextCursor || null);
-    setHistoryHasMore(Boolean(data.hasMore));
-    setHistoryTotal(Number(data.total || items.length));
+    historyRef.current = mergedItems;
+    setHistory(mergedItems);
+    setHistoryNextCursor(mergedItems.length < total ? mergedItems.at(-1)?.id || null : null);
+    setHistoryHasMore(mergedItems.length < total);
+    setHistoryTotal(total);
     syncWorkspacesWithHistory(items);
     return items;
   }
@@ -2158,14 +2204,15 @@ function App({ initialSettings }) {
       const response = await fetch(`/api/history?limit=${HISTORY_PAGE_SIZE}&cursor=${encodeURIComponent(historyNextCursor)}`);
       const data = await readApiJson(response);
       const items = data.items || [];
+      const total = Number(data.total ?? historyTotal ?? historyRef.current.length + items.length);
       setHistoryError("");
-      setHistory((current) => {
-        const existingIds = new Set(current.map((item) => item.id));
-        return [...current, ...items.filter((item) => !existingIds.has(item.id))];
-      });
+      const existingIds = new Set(historyRef.current.map((item) => item.id));
+      const mergedItems = [...historyRef.current, ...items.filter((item) => !existingIds.has(item.id))].slice(0, total);
+      historyRef.current = mergedItems;
+      setHistory(mergedItems);
       setHistoryNextCursor(data.nextCursor || null);
       setHistoryHasMore(Boolean(data.hasMore));
-      setHistoryTotal(Number(data.total || historyTotal || history.length + items.length));
+      setHistoryTotal(total);
       syncWorkspacesWithHistory(items);
       return items;
     } catch (error) {
@@ -2422,7 +2469,7 @@ function App({ initialSettings }) {
         body: JSON.stringify({ id }),
       });
       applyProviderPayload(data);
-      showToast("已切换模型 Key。", "success");
+      showToast("已切换模型途径。", "success");
     } catch (error) {
       const message = error.message || "切换失败。";
       setProviderResult({ tone: "error", message });
@@ -3045,9 +3092,11 @@ function App({ initialSettings }) {
     const response = await fetch(`/api/history/${item.id}`, { method: "DELETE" });
     await readApiJson(response);
     const deletedKeys = new Set([item.id, item.clientRequestId].filter(Boolean));
-    setHistory((current) =>
-      current.filter((historyItem) => ![historyItem.id, historyItem.clientRequestId].filter(Boolean).some((key) => deletedKeys.has(key))),
+    const remainingHistory = historyRef.current.filter(
+      (historyItem) => ![historyItem.id, historyItem.clientRequestId].filter(Boolean).some((key) => deletedKeys.has(key)),
     );
+    historyRef.current = remainingHistory;
+    setHistory(remainingHistory);
     setHistoryTotal((current) => Math.max(0, current - 1));
     clearDeletedHistoryLocally(item);
     if ([previewWorkspace?.historyId, previewWorkspace?.clientRequestId].filter(Boolean).some((key) => deletedKeys.has(key))) {
@@ -3064,32 +3113,38 @@ function App({ initialSettings }) {
   }
 
   const resolvedSize = getResolvedSize(config, mode, imageDimensions);
+  const sizeHelpText =
+    provider.adapter === "ai-platform"
+      ? `当前估算尺寸：${resolvedSize}。AI中台会发送最接近的支持比例和 ${config.resolution}，最终像素尺寸以生成结果为准。`
+      : `实际发送 size：${resolvedSize}。尺寸会自动贴合 API 要求的 16 倍数，宽高比和分辨率不会作为独立字段发送。`;
 
   return (
     <TooltipProvider>
       <Toaster position="top-center" />
       <main className="app-shell dark">
-      <div className="app-brand" aria-label="Jomage2">
-        <img src="/jomage2-logo.png" alt="" />
-        <span>Jomage2</span>
+      <div className="app-header" style={workspaceStyle}>
+        <div className="app-brand" aria-label="Jomage2">
+          <img src="/jomage2-logo.png" alt="" />
+          <span>Jomage2</span>
+        </div>
+        <Button
+          className="provider-settings-button"
+          variant="outline"
+          size="icon"
+          type="button"
+          aria-label="模型设置"
+          onClick={() => {
+            setProviderResult(null);
+            setProviderDraft((current) => ({
+              ...current,
+              baseUrl: current.baseUrl || provider.baseUrl || "",
+            }));
+            setProviderOpen(true);
+          }}
+        >
+          <SettingsIcon />
+        </Button>
       </div>
-      <Button
-        className="provider-settings-button"
-        variant="outline"
-        size="icon"
-        type="button"
-        aria-label="模型设置"
-        onClick={() => {
-          setProviderResult(null);
-          setProviderDraft((current) => ({
-            ...current,
-            baseUrl: current.baseUrl || provider.baseUrl || "",
-          }));
-          setProviderOpen(true);
-        }}
-      >
-        <SettingsIcon />
-      </Button>
       <form className="workspace" style={workspaceStyle} onSubmit={handleSubmit}>
         <section className="control-panel resizable-panel">
           <div className="control-scroll">
@@ -3161,7 +3216,7 @@ function App({ initialSettings }) {
                   label={
                     <>
                       宽高比
-                      <HelpTip text={`实际发送 size：${resolvedSize}。尺寸会自动贴合 API 要求的 16 倍数，宽高比和分辨率不会作为独立字段发送。`} />
+                      <HelpTip text={sizeHelpText} />
                     </>
                   }
                   value={config.aspectRatio}

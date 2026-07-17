@@ -159,6 +159,7 @@
 }
 
 .app-shell {
+  --app-gutter: 24px;
   position: relative;
   display: grid;
   grid-template-rows: minmax(0, 1fr);
@@ -168,18 +169,35 @@
   overflow: hidden;
   background: var(--background);
   color: var(--foreground);
-  padding: 56px 24px 24px;
+  padding: 56px var(--app-gutter) 24px;
+}
+
+.app-header {
+  position: absolute;
+  top: 0;
+  right: var(--app-gutter);
+  left: var(--app-gutter);
+  z-index: 20;
+  display: grid;
+  grid-template-columns:
+    minmax(0, var(--control-panel-width, 480px))
+    minmax(0, var(--preview-panel-width, 692px))
+    minmax(0, var(--history-panel-width, 420px));
+  gap: 20px;
+  align-items: center;
+  justify-content: center;
+  height: 56px;
+  pointer-events: none;
 }
 
 .app-brand {
-  position: absolute;
-  top: 12px;
-  left: 24px;
-  z-index: 20;
+  grid-column: 1;
+  justify-self: start;
   display: flex;
   align-items: center;
   gap: 8px;
   height: 36px;
+  pointer-events: auto;
   color: var(--foreground);
   font-size: 15px;
   font-weight: 600;
@@ -194,10 +212,9 @@
 }
 
 .provider-settings-button {
-  position: absolute;
-  top: 14px;
-  right: 14px;
-  z-index: 20;
+  grid-column: 3;
+  justify-self: end;
+  pointer-events: auto;
 }
 
 .provider-dialog {
@@ -1195,8 +1212,19 @@
   position: absolute;
   right: 4px;
   bottom: 4px;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 120ms ease, visibility 120ms ease;
   background: rgb(0 0 0 / 0.5);
   color: #fff;
+}
+
+.history-thumb-wrap:hover .history-thumb-import,
+.history-thumb-wrap:focus-within .history-thumb-import {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
 }
 
 .history-thumb-import:hover {
@@ -1245,7 +1273,8 @@
 
 @media (max-width: 640px) {
   .app-shell {
-    padding: 12px;
+    --app-gutter: 12px;
+    padding: 56px var(--app-gutter) 12px;
   }
 
   .field-grid.two {
