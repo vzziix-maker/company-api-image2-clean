@@ -1,22 +1,14 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { AlertCircleIcon, ArrowUpIcon, EyeIcon, EyeOffIcon, SettingsIcon } from "lucide-react";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { AlertCircleIcon, ArrowUpIcon, EyeIcon, EyeOffIcon, SettingsIcon, StarIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverDescription, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Toaster } from "@/components/ui/sonner";
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -56,6 +48,7 @@ const aspectRatioOptions = [SMART_ASPECT_RATIO_VALUE, "1:1", "2:3", "3:2", "3:4"
 const resolutionOptions = ["1K", "2K", "4K"];
 const CLIENT_TIMEOUT_MS = 3610000;
 const HISTORY_PAGE_SIZE = 30;
+const HISTORY_FILTER_FADE_MS = 80;
 const MAX_EDIT_IMAGES = 5;
 const SETTINGS_STORAGE_KEY = "deerapi-gpt-image-2-settings-v1";
 const PANEL_WIDTHS_STORAGE_KEY = "deerapi-gpt-image-2-panel-widths-v1";
@@ -572,6 +565,7 @@ function getHistoryResultEntries(item) {
         image,
         outputFormat,
         imageIndex,
+        arrayIndex: index,
         generatedAt: item.completedAt || item.createdAt,
         total,
         src: buildImageSrc(image, outputFormat),
@@ -592,6 +586,7 @@ function getHistorySourceEntries(item) {
     image,
     outputFormat: "png",
     imageIndex: index,
+    arrayIndex: index,
     total,
     src: image.url,
     alt: `参考图 ${index + 1}`,
@@ -1090,7 +1085,7 @@ function ImageSlot({ index, file, preview, onPick, onRemove, onMove }) {
   );
 }
 
-function ImageViewer({ entry, notice, positionLabel, onClose, onNavigate, onCopy, onImport }) {
+function ImageViewer({ entry, notice, positionLabel, onClose, onNavigate, onCopy, onFavorite, onImport }) {
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [pointerDown, setPointerDown] = useState(false);
@@ -1302,6 +1297,16 @@ function ImageViewer({ entry, notice, positionLabel, onClose, onNavigate, onCopy
             <button type="button" onClick={() => onCopy?.(entry.image, entry.outputFormat)}>
               复制
             </button>
+            <button
+              className={cn("image-viewer-favorite", entry.image.favorite && "is-favorite")}
+              type="button"
+              aria-pressed={entry.image.favorite === true}
+              aria-label={entry.image.favorite ? "取消收藏当前图片" : "收藏当前图片"}
+              onClick={() => onFavorite?.(entry)}
+            >
+              <StarIcon aria-hidden="true" />
+              {entry.image.favorite ? "已收藏" : "收藏"}
+            </button>
             <button type="button" onClick={() => onImport?.(entry.image, entry.outputFormat)}>
               导入
             </button>
@@ -1330,7 +1335,7 @@ function ImageViewer({ entry, notice, positionLabel, onClose, onNavigate, onCopy
   );
 }
 
-function ImageResults({ images, outputFormat, generatedAt, loading, elapsedSeconds, onPreview, onCopy, onImport }) {
+function ImageResults({ images, outputFormat, generatedAt, loading, elapsedSeconds, onPreview, onCopy, onFavorite, onImport }) {
   if (loading) {
     return (
       <Card className="empty-state" size="sm">
@@ -1357,7 +1362,7 @@ function ImageResults({ images, outputFormat, generatedAt, loading, elapsedSecon
 
   return (
     <div className="results-grid">
-        {images.map((image) => {
+        {images.map((image, imageIndex) => {
           const src = buildImageSrc(image, outputFormat);
           const alt = `Result ${image.index + 1}`;
           return (
@@ -1373,6 +1378,17 @@ function ImageResults({ images, outputFormat, generatedAt, loading, elapsedSecon
                   </Button>
                   <Button variant="outline" size="sm" type="button" onClick={() => onCopy?.(image, outputFormat)}>
                     复制
+                  </Button>
+                  <Button
+                    className={cn("result-favorite-button", image.favorite && "is-favorite")}
+                    variant="outline"
+                    size="sm"
+                    type="button"
+                    aria-pressed={image.favorite === true}
+                    onClick={() => onFavorite?.(image, imageIndex)}
+                  >
+                    <StarIcon aria-hidden="true" />
+                    {image.favorite ? "已收藏" : "收藏"}
                   </Button>
                   <Button variant="outline" size="sm" type="button" onClick={() => onImport?.(image, outputFormat)}>
                     导入
@@ -1466,6 +1482,13 @@ function historyStatusVariant(status) {
   return "secondary";
 }
 
+function historyItemHasFavorite(item) {
+  return Boolean(
+    item?.images?.some((image) => image?.favorite === true) ||
+    item?.source?.images?.some((image) => image?.favorite === true),
+  );
+}
+
 function HistoryPanel({
   history,
   error,
@@ -1480,6 +1503,10 @@ function HistoryPanel({
   onPreview,
   onImportResult,
   onImportSource,
+  favoritesOnly,
+  filterTransitioning,
+  onFavoritesOnlyChange,
+  onToggleFavorite,
 }) {
   const [pendingDeleteId, setPendingDeleteId] = useState(null);
   const historyListRef = useRef(null);
@@ -1542,12 +1569,25 @@ function HistoryPanel({
     return () => observer.disconnect();
   }, [hasMore, onLoadMore]);
 
+  useEffect(() => {
+    scrollAnchorRef.current = null;
+    historyListRef.current?.scrollTo({ top: 0 });
+  }, [favoritesOnly]);
+
   return (
-    <aside className="history-panel">
+    <aside className={cn("history-panel", filterTransitioning && "is-filter-transitioning")} aria-busy={filterTransitioning}>
         <div className="history-header">
           <div>
             <h2>历史记录</h2>
-            <span>{total ? `${history.length} / ${total} 条` : `${history.length} 条`}</span>
+            <span>{favoritesOnly || total ? `${history.length} / ${total} 条` : `${history.length} 条`}</span>
+          </div>
+          <div className="history-favorites-control">
+            <span id="history-favorites-label">收藏</span>
+            <Switch
+              checked={favoritesOnly}
+              aria-labelledby="history-favorites-label"
+              onCheckedChange={onFavoritesOnlyChange}
+            />
           </div>
         </div>
 
@@ -1580,20 +1620,31 @@ function HistoryPanel({
               <p>{item.config?.prompt || item.error?.message || "无 prompt"}</p>
               {!!item.images?.length && (
                 <div className="history-thumbs">
-                  {item.images.slice(0, 4).map((image) => {
+                  {item.images.slice(0, 4).map((image, imageIndex) => {
                     const src = buildImageSrc(image, item.config?.outputFormat || "png");
-                    const alt = `历史结果 ${image.index + 1}`;
+                    const displayIndex = Number.isInteger(image.index) ? image.index : imageIndex;
+                    const alt = `历史结果 ${displayIndex + 1}`;
                     return (
-                      <div className="history-thumb-wrap" key={image.index}>
-                        <button className="history-thumb-button" type="button" onClick={() => onPreview(item, "result", image.index)}>
+                      <div className="history-thumb-wrap" key={image.id || displayIndex}>
+                        <button className="history-thumb-button" type="button" onClick={() => onPreview(item, "result", displayIndex)}>
                           <img src={src} alt={alt} loading="lazy" />
                         </button>
+                        <Button
+                          className={cn("history-thumb-favorite", image.favorite && "is-favorite")}
+                          variant="outline"
+                          size="icon-xs"
+                          type="button"
+                          aria-label={image.favorite ? `取消收藏历史结果 ${displayIndex + 1}` : `收藏历史结果 ${displayIndex + 1}`}
+                          onClick={() => onToggleFavorite(item, "result", image, imageIndex)}
+                        >
+                          <StarIcon aria-hidden="true" />
+                        </Button>
                         <Button
                           className="history-thumb-import"
                           variant="outline"
                           size="xs"
                           type="button"
-                          aria-label={`导入历史结果 ${image.index + 1}`}
+                          aria-label={`导入历史结果 ${displayIndex + 1}`}
                           onClick={() => onImportResult(image, item.config?.outputFormat || "png")}
                         >
                           导入
@@ -1612,6 +1663,16 @@ function HistoryPanel({
                         <button className="history-thumb-button" type="button" onClick={() => onPreview(item, "source", index)}>
                           <img src={image.url} alt={alt} loading="lazy" />
                         </button>
+                        <Button
+                          className={cn("history-thumb-favorite", image.favorite && "is-favorite")}
+                          variant="outline"
+                          size="icon-xs"
+                          type="button"
+                          aria-label={image.favorite ? `取消收藏历史参考图 ${index + 1}` : `收藏历史参考图 ${index + 1}`}
+                          onClick={() => onToggleFavorite(item, "source", image, index)}
+                        >
+                          <StarIcon aria-hidden="true" />
+                        </Button>
                         <Button
                           className="history-thumb-import"
                           variant="outline"
@@ -1646,23 +1707,25 @@ function HistoryPanel({
                     取消
                   </Button>
                 ) : (
-                  <AlertDialog open={pendingDeleteId === item.id} onOpenChange={(open) => setPendingDeleteId(open ? item.id : null)}>
-                    <Button variant="outline" size="sm" type="button" onClick={() => setPendingDeleteId(item.id)}>
-                      删除
-                    </Button>
-                    <AlertDialogContent>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>确认删除？</AlertDialogTitle>
-                        <AlertDialogDescription>这条历史记录会被移除。</AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>取消</AlertDialogCancel>
-                        <AlertDialogAction variant="outline" onClick={() => confirmDelete(item)}>
-                          确认删除
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
+                  <Popover open={pendingDeleteId === item.id} onOpenChange={(open) => setPendingDeleteId(open ? item.id : null)}>
+                    <PopoverTrigger asChild>
+                      <Button variant="outline" size="sm" type="button">
+                        删除
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="history-delete-popconfirm" align="end" side="top">
+                      <PopoverTitle>删除这条记录？</PopoverTitle>
+                      <PopoverDescription>删除后无法恢复。</PopoverDescription>
+                      <div className="history-delete-popconfirm-actions">
+                        <Button variant="outline" size="sm" type="button" onClick={() => setPendingDeleteId(null)}>
+                          取消
+                        </Button>
+                        <Button variant="destructive" size="sm" type="button" onClick={() => confirmDelete(item)}>
+                          确认
+                        </Button>
+                      </div>
+                    </PopoverContent>
+                  </Popover>
                 )}
               </div>
             </Card>
@@ -1723,6 +1786,9 @@ function App({ initialSettings }) {
   const [historyTotal, setHistoryTotal] = useState(0);
   const [historyError, setHistoryError] = useState("");
   const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const [historyFilterTransitioning, setHistoryFilterTransitioning] = useState(false);
+  const favoritesOnlyRef = useRef(false);
   const [settingsReady, setSettingsReady] = useState(savedSettingsRef.current.source !== "default");
   const [panelWidths, setPanelWidths] = useState(loadSavedPanelWidths);
   const [clockNow, setClockNow] = useState(Date.now());
@@ -1744,6 +1810,7 @@ function App({ initialSettings }) {
   const [referenceDraftReady, setReferenceDraftReady] = useState(false);
   const activeRequestsRef = useRef(new Map());
   const canceledRequestsRef = useRef(new Set());
+  const viewerPagingRef = useRef(false);
   const completionReminderBatchRef = useRef(createCompletionReminderBatch());
   const workspacesRef = useRef(workspaces);
   const [imagePreviews, setImagePreviews] = useState(createEmptyImageSlots);
@@ -1802,7 +1869,8 @@ function App({ initialSettings }) {
     ...item,
     durationMs: getRunningHistoryDuration(item, clockNow),
   }));
-  const visibleHistory = [...localProcessHistory, ...serverHistory].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  const visibleHistory = [...(favoritesOnly ? [] : localProcessHistory), ...serverHistory]
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   const resultViewerEntries = visibleHistory.flatMap(getHistoryResultEntries);
   const sourceViewerItem = visibleHistory.find((item) => item.id === viewerItemId || item.clientRequestId === viewerItemId);
   const sourceViewerEntries = sourceViewerItem ? getHistorySourceEntries(sourceViewerItem) : [];
@@ -2179,9 +2247,17 @@ function App({ initialSettings }) {
     return data;
   }
 
-  async function loadHistory() {
-    const response = await fetch(`/api/history?limit=${HISTORY_PAGE_SIZE}`);
+  async function loadHistory(onlyFavorites = favoritesOnlyRef.current, minimumDelayMs = 0) {
+    const startedAt = Date.now();
+    const favoriteQuery = onlyFavorites ? "&favorite=1" : "";
+    const response = await fetch(`/api/history?limit=${HISTORY_PAGE_SIZE}${favoriteQuery}`);
     const data = await readApiJson(response);
+    if (favoritesOnlyRef.current !== onlyFavorites) return [];
+    const remainingDelay = minimumDelayMs - (Date.now() - startedAt);
+    if (remainingDelay > 0) {
+      await new Promise((resolve) => window.setTimeout(resolve, remainingDelay));
+    }
+    if (favoritesOnlyRef.current !== onlyFavorites) return [];
     const items = data.items || [];
     const total = Number(data.total ?? items.length);
     const mergedItems = mergeRefreshedHistory(historyRef.current, items, total);
@@ -2195,30 +2271,108 @@ function App({ initialSettings }) {
     return items;
   }
 
+  async function appendHistoryPage(cursor, onlyFavorites = favoritesOnlyRef.current) {
+    const favoriteQuery = onlyFavorites ? "&favorite=1" : "";
+    const response = await fetch(`/api/history?limit=${HISTORY_PAGE_SIZE}&cursor=${encodeURIComponent(cursor)}${favoriteQuery}`);
+    const data = await readApiJson(response);
+    if (favoritesOnlyRef.current !== onlyFavorites) return { ...data, items: [] };
+    const items = data.items || [];
+    const total = Number(data.total ?? historyTotal ?? historyRef.current.length + items.length);
+    setHistoryError("");
+    const existingIds = new Set(historyRef.current.map((item) => item.id));
+    const mergedItems = [...historyRef.current, ...items.filter((item) => !existingIds.has(item.id))].slice(0, total);
+    historyRef.current = mergedItems;
+    setHistory(mergedItems);
+    setHistoryNextCursor(data.nextCursor || null);
+    setHistoryHasMore(Boolean(data.hasMore));
+    setHistoryTotal(total);
+    syncWorkspacesWithHistory(items);
+    return { ...data, items };
+  }
+
   async function loadMoreHistory() {
-    if (!historyHasMore || historyLoadingMore || !historyNextCursor) return [];
+    if (!historyHasMore || historyLoadingMore || !historyNextCursor) return null;
+    const onlyFavorites = favoritesOnlyRef.current;
     setHistoryLoadingMore(true);
     try {
-      const response = await fetch(`/api/history?limit=${HISTORY_PAGE_SIZE}&cursor=${encodeURIComponent(historyNextCursor)}`);
-      const data = await readApiJson(response);
-      const items = data.items || [];
-      const total = Number(data.total ?? historyTotal ?? historyRef.current.length + items.length);
-      setHistoryError("");
-      const existingIds = new Set(historyRef.current.map((item) => item.id));
-      const mergedItems = [...historyRef.current, ...items.filter((item) => !existingIds.has(item.id))].slice(0, total);
-      historyRef.current = mergedItems;
-      setHistory(mergedItems);
-      setHistoryNextCursor(data.nextCursor || null);
-      setHistoryHasMore(Boolean(data.hasMore));
-      setHistoryTotal(total);
-      syncWorkspacesWithHistory(items);
-      return items;
+      return await appendHistoryPage(historyNextCursor, onlyFavorites);
     } catch (error) {
       setHistoryError(error.message || "历史接口请求失败。");
       throw error;
     } finally {
       setHistoryLoadingMore(false);
     }
+  }
+
+  function changeFavoritesOnly(nextValue) {
+    favoritesOnlyRef.current = nextValue;
+    setFavoritesOnly(nextValue);
+    setHistoryFilterTransitioning(true);
+    historyRef.current = [];
+    setHistoryNextCursor(null);
+    setHistoryHasMore(false);
+    setHistoryError("");
+    setHistoryLoadingMore(false);
+    loadHistory(nextValue, HISTORY_FILTER_FADE_MS)
+      .catch((error) => {
+        if (favoritesOnlyRef.current === nextValue) {
+          setHistoryError(error.message || "历史接口请求失败。");
+        }
+      })
+      .finally(() => {
+        if (favoritesOnlyRef.current !== nextValue) return;
+        window.requestAnimationFrame(() => setHistoryFilterTransitioning(false));
+      });
+  }
+
+  async function toggleHistoryImageFavorite(item, kind, image, imageIndex) {
+    try {
+      const data = await requestJson(`/api/history/${encodeURIComponent(item.id)}/favorite`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          kind,
+          imageId: image.id || "",
+          imageIndex,
+          favorite: image.favorite !== true,
+        }),
+      });
+      const updatedItem = data.item;
+      const stillMatchesFilter = historyItemHasFavorite(updatedItem);
+      const nextHistory = historyRef.current
+        .map((historyItem) => (historyItem.id === updatedItem.id ? updatedItem : historyItem))
+        .filter((historyItem) => !favoritesOnlyRef.current || historyItemHasFavorite(historyItem));
+      historyRef.current = nextHistory;
+      setHistory(nextHistory);
+      setWorkspaces((current) =>
+        current.map((workspace) =>
+          workspaceMatchesHistoryItem(workspace, updatedItem)
+            ? { ...workspace, images: updatedItem.images || workspace.images }
+            : workspace,
+        ),
+      );
+
+      if (favoritesOnlyRef.current && !stillMatchesFilter) {
+        setHistoryTotal((current) => Math.max(0, current - 1));
+        await loadHistory(true);
+      }
+    } catch (error) {
+      showToast(error.message || "收藏状态保存失败。", "error");
+    }
+  }
+
+  function togglePreviewResultFavorite(image, imageIndex) {
+    const historyId = previewWorkspace?.historyId || previewWorkspace?.clientRequestId;
+    if (!historyId) {
+      showToast("历史记录尚未保存，暂时无法收藏。", "warning");
+      return;
+    }
+    toggleHistoryImageFavorite({ id: historyId }, "result", image, imageIndex);
+  }
+
+  function toggleViewerFavorite(entry) {
+    if (!entry?.itemId) return;
+    toggleHistoryImageFavorite(entry.item || { id: entry.itemId }, entry.kind, entry.image, entry.arrayIndex);
   }
 
   function syncWorkspacesWithHistory(items) {
@@ -2914,7 +3068,55 @@ function App({ initialSettings }) {
       return;
     }
     if (nextIndex >= activeViewerEntries.length) {
-      setViewerNotice("已是最后一张");
+      const canLoadMoreResults =
+        direction > 0 &&
+        viewerMode === "result" &&
+        !adHocViewerEntries &&
+        historyHasMore &&
+        historyNextCursor;
+      if (!canLoadMoreResults) {
+        setViewerNotice("已是最后一张");
+        return;
+      }
+      if (viewerPagingRef.current || historyLoadingMore) {
+        setViewerNotice("正在加载更多...");
+        return;
+      }
+
+      viewerPagingRef.current = true;
+      setHistoryLoadingMore(true);
+      setViewerNotice("正在加载更多...");
+      try {
+        const existingEntryKeys = new Set(activeViewerEntries.map((entry) => entry.key));
+        let cursor = historyNextCursor;
+        let hasMore = historyHasMore;
+        while (hasMore && cursor) {
+          const page = await appendHistoryPage(cursor);
+          const nextEntries = (page.items || [])
+            .flatMap(getHistoryResultEntries)
+            .filter((entry) => !existingEntryKeys.has(entry.key));
+          if (nextEntries.length) {
+            const targetEntry = nextEntries[0];
+            const updatedResultEntries = [...(favoritesOnlyRef.current ? [] : localProcessHistory), ...historyRef.current]
+              .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+              .flatMap(getHistoryResultEntries);
+            const targetIndex = updatedResultEntries.findIndex((entry) => entry.key === targetEntry.key);
+            setViewerNotice("");
+            setViewerIndex(targetIndex >= 0 ? targetIndex : activeViewerEntries.length);
+            previewHistoryItem(targetEntry.item);
+            return;
+          }
+          cursor = page.nextCursor || null;
+          hasMore = Boolean(page.hasMore);
+        }
+        setViewerNotice("已是最后一张");
+      } catch (error) {
+        setHistoryError(error.message || "历史接口请求失败。");
+        setViewerNotice("加载历史失败");
+      } finally {
+        viewerPagingRef.current = false;
+        setHistoryLoadingMore(false);
+      }
       return;
     }
     const nextEntry = activeViewerEntries[nextIndex];
@@ -3253,6 +3455,7 @@ function App({ initialSettings }) {
             elapsedSeconds={previewElapsedSeconds}
             onPreview={openActiveResultImage}
             onCopy={copyResultImage}
+            onFavorite={togglePreviewResultFavorite}
             onImport={importResultImage}
           />
           <PanelResizeHandle label="预览区" onResizeStart={(event) => startPanelResize("preview", event)} />
@@ -3264,7 +3467,7 @@ function App({ initialSettings }) {
             error={historyError}
             hasMore={historyHasMore}
             loadingMore={historyLoadingMore}
-            total={historyTotal + localProcessHistory.length}
+            total={historyTotal + (favoritesOnly ? 0 : localProcessHistory.length)}
             onLoadMore={loadMoreHistory}
             onView={previewHistoryItem}
             onEdit={loadHistoryItem}
@@ -3273,6 +3476,10 @@ function App({ initialSettings }) {
             onPreview={openHistoryImage}
             onImportResult={importResultImage}
             onImportSource={importSourceAsset}
+            favoritesOnly={favoritesOnly}
+            filterTransitioning={historyFilterTransitioning}
+            onFavoritesOnlyChange={changeFavoritesOnly}
+            onToggleFavorite={toggleHistoryImageFavorite}
           />
           <PanelResizeHandle label="历史记录" onResizeStart={(event) => startPanelResize("history", event)} />
         </div>
@@ -3283,6 +3490,7 @@ function App({ initialSettings }) {
           notice={viewerNotice}
           positionLabel={viewerPositionLabel}
           onCopy={copyResultImage}
+          onFavorite={toggleViewerFavorite}
           onImport={importResultImage}
           onClose={() => {
             setViewerIndex(null);

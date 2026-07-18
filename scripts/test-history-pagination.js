@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -111,6 +111,16 @@ async function readHistory(query = "") {
   return response.json();
 }
 
+async function patchFavorite(id, body) {
+  const response = await fetch(`http://127.0.0.1:${appPort}/api/history/${id}/favorite`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await response.json();
+  return { response, data };
+}
+
 try {
   await waitForServer();
   await createHistory("page-oldest");
@@ -119,7 +129,7 @@ try {
 
   const firstPage = await readHistory("?limit=2");
   const secondPage = await readHistory(`?limit=2&cursor=${encodeURIComponent(firstPage.nextCursor)}`);
-  const ok =
+  const paginationOk =
     firstPage.items.length === 2 &&
     firstPage.items[0].id === "page-newest" &&
     firstPage.items[1].id === "page-middle" &&
@@ -132,7 +142,69 @@ try {
     secondPage.nextCursor === null &&
     secondPage.total === 3;
 
-  console.log(JSON.stringify({ ok, firstPage, secondPage }, null, 2));
+  const historyPath = join(appDataDir, "history.json");
+  const storedHistory = JSON.parse(await readFile(historyPath, "utf8"));
+  const pageNewest = storedHistory.find((item) => item.id === "page-newest");
+  const pageMiddle = storedHistory.find((item) => item.id === "page-middle");
+  const pageOldest = storedHistory.find((item) => item.id === "page-oldest");
+  pageMiddle.source = {
+    images: [{ id: "source-image-1", url: "/api/history-assets/source-image-1.png" }],
+  };
+  const fillerItems = Array.from({ length: 32 }, (_, index) => ({
+    ...pageNewest,
+    id: `filler-${index + 1}`,
+    clientRequestId: `filler-${index + 1}`,
+    createdAt: new Date(Date.now() + (index + 1) * 1000).toISOString(),
+    images: (pageNewest.images || []).map((image) => ({ ...image, favorite: false })),
+  })).reverse();
+  await writeFile(historyPath, JSON.stringify([...fillerItems, pageNewest, pageMiddle, pageOldest], null, 2));
+
+  const favoriteOldest = await patchFavorite("page-oldest", {
+    kind: "result",
+    imageIndex: 0,
+    favorite: true,
+  });
+  const firstFavoritePage = await readHistory("?limit=30&favorite=1");
+  const favoriteSource = await patchFavorite("page-middle", {
+    kind: "source",
+    imageId: "source-image-1",
+    imageIndex: 0,
+    favorite: true,
+  });
+  const favoritePageOne = await readHistory("?limit=1&favorite=1");
+  const favoritePageTwo = await readHistory(`?limit=1&favorite=1&cursor=${encodeURIComponent(favoritePageOne.nextCursor)}`);
+  const unfavoriteOldest = await patchFavorite("page-oldest", {
+    kind: "result",
+    imageIndex: 0,
+    favorite: false,
+  });
+  const afterUnfavorite = await readHistory("?limit=30&favorite=1");
+  const invalidKind = await patchFavorite("page-middle", { kind: "other", imageIndex: 0, favorite: true });
+  const missingImage = await patchFavorite("page-middle", { kind: "source", imageIndex: 99, favorite: true });
+  const persistedHistory = JSON.parse(await readFile(historyPath, "utf8"));
+  const persistedMiddle = persistedHistory.find((item) => item.id === "page-middle");
+  const persistedOldest = persistedHistory.find((item) => item.id === "page-oldest");
+
+  const favoritesOk =
+    favoriteOldest.response.ok &&
+    firstFavoritePage.total === 1 &&
+    firstFavoritePage.items[0]?.id === "page-oldest" &&
+    favoriteSource.response.ok &&
+    favoritePageOne.total === 2 &&
+    favoritePageOne.items.length === 1 &&
+    favoritePageOne.hasMore === true &&
+    favoritePageTwo.items.length === 1 &&
+    favoritePageTwo.hasMore === false &&
+    unfavoriteOldest.response.ok &&
+    afterUnfavorite.total === 1 &&
+    afterUnfavorite.items[0]?.id === "page-middle" &&
+    invalidKind.response.status === 400 &&
+    missingImage.response.status === 404 &&
+    persistedMiddle.source.images[0].favorite === true &&
+    persistedOldest.images[0].favorite === false;
+  const ok = paginationOk && favoritesOk;
+
+  console.log(JSON.stringify({ ok, paginationOk, favoritesOk, firstPage, secondPage }, null, 2));
   if (!ok) process.exitCode = 1;
 } finally {
   child.kill();

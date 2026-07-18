@@ -156,6 +156,13 @@ function paginateHistory(items, { cursor, limit }) {
   };
 }
 
+function historyItemHasFavorite(item) {
+  return Boolean(
+    item?.images?.some((image) => image?.favorite === true) ||
+    item?.source?.images?.some((image) => image?.favorite === true),
+  );
+}
+
 function withHistoryWriteLock(operation) {
   const nextOperation = historyWriteQueue.then(operation, operation);
   historyWriteQueue = nextOperation.catch(() => {});
@@ -1375,10 +1382,58 @@ app.get("/api/health", async (_request, response, next) => {
 
 app.get("/api/history", async (request, response, next) => {
   try {
-    const items = await readHistory();
+    const allItems = await readHistory();
+    const items = request.query.favorite === "1" ? allItems.filter(historyItemHasFavorite) : allItems;
     const limit = numberInRange(request.query.limit, DEFAULT_HISTORY_PAGE_SIZE, 1, MAX_HISTORY_PAGE_SIZE);
     const cursor = normalizeHistoryId(request.query.cursor);
     response.json(paginateHistory(items, { cursor, limit }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch("/api/history/:id/favorite", async (request, response, next) => {
+  try {
+    const kind = request.body?.kind;
+    if (kind !== "result" && kind !== "source") {
+      const error = new Error("收藏图片类型无效。");
+      error.status = 400;
+      throw error;
+    }
+    if (typeof request.body?.favorite !== "boolean") {
+      const error = new Error("收藏状态无效。");
+      error.status = 400;
+      throw error;
+    }
+    const imageId = normalizeString(request.body?.imageId, "");
+    const imageIndex = Number(request.body?.imageIndex);
+    const favorite = request.body.favorite;
+    let targetFound = false;
+    const updated = await updateHistory(request.params.id, (item) => {
+      const images = kind === "result" ? item.images || [] : item.source?.images || [];
+      const targetIndex = imageId
+        ? images.findIndex((image) => image?.id === imageId)
+        : Number.isInteger(imageIndex) && imageIndex >= 0 && imageIndex < images.length
+          ? imageIndex
+          : -1;
+      if (targetIndex < 0) return item;
+      targetFound = true;
+      const nextImages = images.map((image, index) => (index === targetIndex ? { ...image, favorite } : image));
+      return kind === "result"
+        ? { ...item, images: nextImages }
+        : { ...item, source: { ...(item.source || {}), images: nextImages } };
+    });
+    if (!updated) {
+      const error = new Error("历史记录不存在。");
+      error.status = 404;
+      throw error;
+    }
+    if (!targetFound) {
+      const error = new Error("历史图片不存在。");
+      error.status = 404;
+      throw error;
+    }
+    response.json({ ok: true, item: updated });
   } catch (error) {
     next(error);
   }
