@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { AlertCircleIcon, ArrowUpIcon, EyeIcon, EyeOffIcon, SettingsIcon, StarIcon } from "lucide-react";
+import { AlertCircleIcon, ArrowUpIcon, EyeIcon, EyeOffIcon, SettingsIcon, StarIcon, UploadIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -47,6 +47,7 @@ const countOptions = [1, 2, 3, 4];
 const aspectRatioOptions = [SMART_ASPECT_RATIO_VALUE, "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"];
 const resolutionOptions = ["1K", "2K", "4K"];
 const CLIENT_TIMEOUT_MS = 3610000;
+const SUBMIT_LOCK_MS = 100;
 const HISTORY_PAGE_SIZE = 30;
 const HISTORY_FILTER_FADE_MS = 80;
 const MAX_EDIT_IMAGES = 5;
@@ -794,7 +795,7 @@ function ProviderSettingsDialog({
                           {active && <Badge variant="secondary">当前</Badge>}
                         </span>
                         <span className="provider-list-url">
-                          {profile.builtIn ? "无需 Key · 参考图临时上传 12h" : profile.baseUrl}
+                          {profile.builtIn ? "无需 Key · 参考图自动临时上传" : profile.baseUrl}
                         </span>
                       </button>
                       <div className="provider-list-actions">
@@ -843,12 +844,13 @@ function hasInternalImageSlotDrag(dataTransfer) {
   return Array.from(dataTransfer?.types || []).includes("application/x-image-slot-index");
 }
 
-function ImageSlot({ index, file, preview, onPick, onRemove, onMove }) {
+function ImageSlot({ index, file, preview, onPick, onPreview, onRemove, onMove }) {
   const inputRef = useRef(null);
   const dragDepthRef = useRef(0);
   const dragGhostRef = useRef(null);
   const draggingSelfRef = useRef(false);
   const hoverSuppressTimerRef = useRef(null);
+  const suppressClickRef = useRef(false);
   const [dragActive, setDragActive] = useState(false);
   const [sortActive, setSortActive] = useState(false);
   const [draggingSelf, setDraggingSelf] = useState(false);
@@ -890,9 +892,11 @@ function ImageSlot({ index, file, preview, onPick, onRemove, onMove }) {
 
   function suppressHoverBriefly() {
     window.clearTimeout(hoverSuppressTimerRef.current);
+    suppressClickRef.current = true;
     setSuppressHover(true);
     setPasteActive(false);
     hoverSuppressTimerRef.current = window.setTimeout(() => {
+      suppressClickRef.current = false;
       setSuppressHover(false);
     }, 110);
   }
@@ -933,9 +937,24 @@ function ImageSlot({ index, file, preview, onPick, onRemove, onMove }) {
       window.removeEventListener("drop", resetDragSession, true);
       window.removeEventListener("blur", resetDragSession);
       window.clearTimeout(hoverSuppressTimerRef.current);
+      suppressClickRef.current = false;
       cleanupDragGhost();
     };
   }, []);
+
+  function handleActivate() {
+    if (suppressClickRef.current) return;
+    if (file && preview) {
+      onPreview(index);
+      return;
+    }
+    inputRef.current?.click();
+  }
+
+  function handleReplace(event) {
+    event.stopPropagation();
+    inputRef.current?.click();
+  }
 
   function handleDrop(event) {
     event.preventDefault();
@@ -986,7 +1005,7 @@ function ImageSlot({ index, file, preview, onPick, onRemove, onMove }) {
         suppressHover && "suppress-hover",
         pasteActive && "paste-active",
       )}
-      onClick={() => inputRef.current?.click()}
+      onClick={handleActivate}
       draggable={Boolean(file)}
       onDragStart={handleDragStart}
       onDragEnd={() => {
@@ -1047,7 +1066,7 @@ function ImageSlot({ index, file, preview, onPick, onRemove, onMove }) {
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          inputRef.current?.click();
+          handleActivate();
         }
       }}
     >
@@ -1063,6 +1082,14 @@ function ImageSlot({ index, file, preview, onPick, onRemove, onMove }) {
       {file && preview ? (
         <>
           <img src={preview.url} alt={`Source preview ${index + 1}`} />
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button className="slot-replace" variant="ghost" size="icon-sm" type="button" onClick={handleReplace} aria-label={`重新上传第 ${index + 1} 张图片`}>
+                <UploadIcon aria-hidden="true" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>重新上传</TooltipContent>
+          </Tooltip>
           <Button className="slot-remove" variant="ghost" size="icon-sm" type="button" onClick={handleRemove} aria-label={`删除第 ${index + 1} 张图片`}>
             ×
           </Button>
@@ -1456,7 +1483,17 @@ function isUpstreamOperationTimeoutError(error) {
   return /operation was timeout|timed out|time[-\s]?out|timeout/i.test(error?.message || "");
 }
 
+function isReferenceUploadError(error) {
+  return error?.code === "reference_upload_failed";
+}
+
 function formatSubmitError(error) {
+  if (isReferenceUploadError(error)) {
+    if (/timeout|timed out|aborted due to timeout/i.test(error?.message || "")) {
+      return "参考图临时上传超时，已自动尝试 Litterbox、Uguu 和 Filebin。请检查本机代理或稍后重试。";
+    }
+    return error.message;
+  }
   if (isLocalTimeoutError(error)) {
     return "本地等待图片服务超过 60 分钟，已自动停止。可以降低数量、尺寸或质量后重试。";
   }
@@ -1507,6 +1544,7 @@ function HistoryPanel({
   filterTransitioning,
   onFavoritesOnlyChange,
   onToggleFavorite,
+  onOpenSettings,
 }) {
   const [pendingDeleteId, setPendingDeleteId] = useState(null);
   const historyListRef = useRef(null);
@@ -1555,6 +1593,29 @@ function HistoryPanel({
     captureScrollAnchor();
   }, [historyLayoutKey]);
 
+  useLayoutEffect(() => {
+    const historyList = historyListRef.current;
+    const controlScroll = document.querySelector(".control-scroll");
+    if (!historyList) return undefined;
+
+    const getScrollbarWidth = (element) => (
+      element && element.scrollHeight > element.clientHeight + 1
+        ? element.offsetWidth - element.clientWidth
+        : 0
+    );
+    const syncScrollbarSpacing = () => {
+      historyList.style.setProperty("--input-scrollbar-width", `${getScrollbarWidth(controlScroll)}px`);
+      historyList.style.setProperty("--history-scrollbar-width", `${getScrollbarWidth(historyList)}px`);
+    };
+
+    syncScrollbarSpacing();
+    if (typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(syncScrollbarSpacing);
+    observer.observe(historyList);
+    if (controlScroll) observer.observe(controlScroll);
+    return () => observer.disconnect();
+  });
+
   useEffect(() => {
     if (!hasMore || !onLoadMore) return undefined;
     const target = loadMoreRef.current;
@@ -1581,13 +1642,25 @@ function HistoryPanel({
             <h2>历史记录</h2>
             <span>{favoritesOnly || total ? `${history.length} / ${total} 条` : `${history.length} 条`}</span>
           </div>
-          <div className="history-favorites-control">
-            <span id="history-favorites-label">收藏</span>
-            <Switch
-              checked={favoritesOnly}
-              aria-labelledby="history-favorites-label"
-              onCheckedChange={onFavoritesOnlyChange}
-            />
+          <div className="history-header-controls">
+            <div className="history-favorites-control">
+              <span id="history-favorites-label">收藏</span>
+              <Switch
+                checked={favoritesOnly}
+                aria-labelledby="history-favorites-label"
+                onCheckedChange={onFavoritesOnlyChange}
+              />
+            </div>
+            <Button
+              className="provider-settings-button"
+              variant="outline"
+              size="icon"
+              type="button"
+              aria-label="模型设置"
+              onClick={onOpenSettings}
+            >
+              <SettingsIcon />
+            </Button>
           </div>
         </div>
 
@@ -2032,6 +2105,14 @@ function App({ initialSettings }) {
     }, 1000);
     return () => window.clearInterval(timer);
   }, [anyLiveTimer]);
+
+  useEffect(() => {
+    if (!submitLockedUntil) return undefined;
+    const timer = window.setTimeout(() => {
+      setSubmitLockedUntil(0);
+    }, Math.max(0, submitLockedUntil - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [submitLockedUntil]);
 
   useEffect(() => {
     if (!hasRunningHistory && !hasLoadingWorkspace) return undefined;
@@ -2728,7 +2809,7 @@ function App({ initialSettings }) {
     if (!workspace) return;
     const lockedAt = Date.now();
     setClockNow(lockedAt);
-    setSubmitLockedUntil(lockedAt + 1000);
+    setSubmitLockedUntil(lockedAt + SUBMIT_LOCK_MS);
     ensureBrowserNotificationPermission();
 
     const imageFiles = getSelectedImageFiles(workspace);
@@ -3031,6 +3112,28 @@ function App({ initialSettings }) {
     await openHistoryImage(item, "result", image.index);
   }
 
+  function openActiveSourceImage(slotIndex) {
+    const entries = imageSlots
+      .map((file, index) => ({ file, index, preview: imagePreviews[index] }))
+      .filter((entry) => entry.file && entry.preview?.url)
+      .map((entry, imageIndex, allEntries) => ({
+        key: `${activeWorkspaceId}:source:${entry.index}:${entry.file.name}:${entry.file.lastModified}`,
+        kind: "source",
+        imageIndex,
+        slotIndex: entry.index,
+        total: allEntries.length,
+        src: entry.preview.url,
+        alt: `参考图 ${imageIndex + 1}`,
+      }));
+    const targetIndex = entries.findIndex((entry) => entry.slotIndex === slotIndex);
+    if (targetIndex < 0) return;
+    setAdHocViewerEntries(entries);
+    setViewerMode("source");
+    setViewerItemId(null);
+    setViewerNotice("");
+    setViewerIndex(targetIndex);
+  }
+
   async function copyResultImage(image, imageOutputFormat = config.outputFormat) {
     try {
       await copyImageToClipboard(image, imageOutputFormat);
@@ -3318,39 +3421,28 @@ function App({ initialSettings }) {
       ? `当前估算尺寸：${resolvedSize}。AI中台会发送最接近的支持比例和 ${config.resolution}，最终像素尺寸以生成结果为准。`
       : `实际发送 size：${resolvedSize}。尺寸会自动贴合 API 要求的 16 倍数，宽高比和分辨率不会作为独立字段发送。`;
 
+  function openProviderSettings() {
+    setProviderResult(null);
+    setProviderDraft((current) => ({
+      ...current,
+      baseUrl: current.baseUrl || provider.baseUrl || "",
+    }));
+    setProviderOpen(true);
+  }
+
   return (
     <TooltipProvider>
       <Toaster position="top-center" />
       <main className="app-shell dark">
-      <div className="app-header" style={workspaceStyle}>
-        <div className="app-brand" aria-label="Jomage2">
-          <img src="/jomage2-logo.png" alt="" />
-          <span>Jomage2</span>
-        </div>
-        <Button
-          className="provider-settings-button"
-          variant="outline"
-          size="icon"
-          type="button"
-          aria-label="模型设置"
-          onClick={() => {
-            setProviderResult(null);
-            setProviderDraft((current) => ({
-              ...current,
-              baseUrl: current.baseUrl || provider.baseUrl || "",
-            }));
-            setProviderOpen(true);
-          }}
-        >
-          <SettingsIcon />
-        </Button>
-      </div>
       <form className="workspace" style={workspaceStyle} onSubmit={handleSubmit}>
         <section className="control-panel resizable-panel">
           <div className="control-scroll">
             <div className="field prompt-field">
               <div className="prompt-heading">
-                <span className="field-label">Prompt</span>
+                <div className="app-brand" aria-label="Jomage2">
+                  <img src="/jomage2-logo.png" alt="" />
+                  <span>Jomage2</span>
+                </div>
                 <Button variant="outline" size="sm" type="button" onClick={createNewWorkspace}>
                   新建
                 </Button>
@@ -3382,6 +3474,7 @@ function App({ initialSettings }) {
                     key={index}
                     onMove={moveImageSlot}
                     onPick={setImageSlot}
+                    onPreview={openActiveSourceImage}
                     onRemove={removeImageSlot}
                     preview={imagePreviews[index]}
                   />
@@ -3480,6 +3573,7 @@ function App({ initialSettings }) {
             filterTransitioning={historyFilterTransitioning}
             onFavoritesOnlyChange={changeFavoritesOnly}
             onToggleFavorite={toggleHistoryImageFavorite}
+            onOpenSettings={openProviderSettings}
           />
           <PanelResizeHandle label="历史记录" onResizeStart={(event) => startPanelResize("history", event)} />
         </div>

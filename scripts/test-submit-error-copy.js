@@ -28,6 +28,7 @@ const moduleSource = [
   "isLocalTimeoutError",
   "isGatewayTimeoutError",
   "isUpstreamOperationTimeoutError",
+  "isReferenceUploadError",
   "formatSubmitError",
 ]
   .map(extractFunction)
@@ -45,6 +46,14 @@ const cases = [
     name: "upstream gateway timeout does not mention the 60 minute local wait",
     error: { status: 504, message: "Gateway Time-out" },
     expected: "上游服务网关超时了。通常是图片服务或中转 API 在完成前断开；可以降低数量、尺寸或质量后重试。",
+  },
+  {
+    name: "reference upload timeout is not described as generation timeout",
+    error: {
+      code: "reference_upload_failed",
+      message: "参考图临时上传失败：Litterbox The operation was aborted due to timeout。",
+    },
+    expected: "参考图临时上传超时，已自动尝试 Litterbox、Uguu 和 Filebin。请检查本机代理或稍后重试。",
   },
   {
     name: "upstream processing timeout is described as upstream timeout",

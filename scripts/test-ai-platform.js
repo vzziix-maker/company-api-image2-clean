@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { cleanupTemporaryReferences, uploadTemporaryReferences } from "../server/ai-platform.js";
 
 const mockPort = 19931;
 const appPort = 19932;
@@ -11,6 +12,7 @@ const appDataDir = await mkdtemp(join(tmpdir(), "image2-ai-platform-"));
 const createRequests = [];
 const litterboxRequests = [];
 const taskPrompts = new Map();
+const fallbackRequests = { litterbox: 0, uguu: 0, filebin: 0, filebinDeletes: 0 };
 let uploadIndex = 0;
 let taskIndex = 0;
 let resumeMayFinish = false;
@@ -39,6 +41,48 @@ function pngBuffer(width = 64, height = 64) {
 
 const resultImage = pngBuffer(1024, 1024);
 const mock = createServer(async (request, response) => {
+  if (request.url === "/litterbox-fail" && request.method === "POST") {
+    await readBody(request);
+    fallbackRequests.litterbox += 1;
+    response.writeHead(500, { "Content-Type": "text/plain" });
+    response.end("temporary failure");
+    return;
+  }
+
+  if ((request.url === "/uguu-success" || request.url === "/uguu-fail") && request.method === "POST") {
+    await readBody(request);
+    fallbackRequests.uguu += 1;
+    if (request.url === "/uguu-fail") {
+      response.writeHead(503, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ success: false, files: [], errors: ["temporary failure"] }));
+      return;
+    }
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ success: true, files: [{ url: "https://h.uguu.se/fallback.png" }], errors: [] }));
+    return;
+  }
+
+  if (request.url?.startsWith("/filebin/") && request.method === "POST") {
+    await readBody(request);
+    fallbackRequests.filebin += 1;
+    response.writeHead(201, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ status: "ok" }));
+    return;
+  }
+
+  if (request.url?.startsWith("/filebin/") && request.method === "GET") {
+    response.writeHead(302, { Location: "https://storage.test/signed-reference.png?expires=900" });
+    response.end();
+    return;
+  }
+
+  if (request.url?.startsWith("/filebin/") && request.method === "DELETE") {
+    fallbackRequests.filebinDeletes += 1;
+    response.writeHead(200, { "Content-Type": "text/plain" });
+    response.end("deleted");
+    return;
+  }
+
   if (request.url === "/litterbox" && request.method === "POST") {
     const body = await readBody(request);
     const text = body.toString("latin1");
@@ -166,6 +210,46 @@ let child = startApp();
 try {
   await waitForServer(child);
 
+  const fallbackFile = {
+    buffer: pngBuffer(400, 400),
+    mimetype: "image/png",
+    originalname: "fallback.png",
+  };
+  const uguuFallbackUrls = await uploadTemporaryReferences([fallbackFile], {
+    uploadUrl: `http://127.0.0.1:${mockPort}/litterbox-fail`,
+    uguuUploadUrl: `http://127.0.0.1:${mockPort}/uguu-success`,
+    retries: 1,
+    skipVerify: true,
+  });
+  assert.deepEqual(uguuFallbackUrls, ["https://h.uguu.se/fallback.png"]);
+
+  const filebinFallbackUrls = await uploadTemporaryReferences([fallbackFile], {
+    uploadUrl: `http://127.0.0.1:${mockPort}/litterbox-fail`,
+    uguuUploadUrl: `http://127.0.0.1:${mockPort}/uguu-fail`,
+    filebinOrigin: `http://127.0.0.1:${mockPort}/filebin/`,
+    filebinStorageHost: "storage.test",
+    retries: 1,
+    skipVerify: true,
+  });
+  assert.equal(filebinFallbackUrls[0].startsWith("https://storage.test/signed-reference.png"), true);
+  const cleanupResult = await cleanupTemporaryReferences(filebinFallbackUrls, {
+    filebinOrigin: `http://127.0.0.1:${mockPort}/filebin/`,
+  });
+  assert.deepEqual(cleanupResult, { deleted: 1, failed: 0 });
+  await assert.rejects(
+    uploadTemporaryReferences([fallbackFile], {
+      uploadUrl: `http://127.0.0.1:${mockPort}/litterbox-fail`,
+      uguuUploadUrl: `http://127.0.0.1:${mockPort}/uguu-fail`,
+      filebinOrigin: `http://127.0.0.1:${mockPort}/filebin-fail/`,
+      retries: 1,
+      skipVerify: true,
+    }),
+    (error) =>
+      error.code === "reference_upload_failed" &&
+      error.message.includes("Litterbox HTTP 500；Uguu HTTP 503；Filebin HTTP 404"),
+  );
+  assert.deepEqual(fallbackRequests, { litterbox: 3, uguu: 3, filebin: 1, filebinDeletes: 1 });
+
   const providers = await api("/api/provider-settings");
   assert.equal(providers.provider.id, "builtin-ai-platform");
   assert.equal(providers.profiles[0].builtIn, true);
@@ -248,6 +332,7 @@ try {
         editImages: editHistory.images.length,
         resumedTask: resumed.status,
         temporaryUrlsPersisted: false,
+        fallbackRequests,
       },
       null,
       2,

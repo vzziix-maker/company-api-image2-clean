@@ -8,14 +8,15 @@ import { isIP } from "node:net";
 import { extname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import multer from "multer";
-import { Agent, interceptors } from "undici";
+import { Agent, EnvHttpProxyAgent, interceptors } from "undici";
 import {
   AI_PLATFORM_PROVIDER,
   AI_PLATFORM_PROVIDER_ID,
   buildAiPlatformExt,
+  cleanupTemporaryReferences,
   createAiPlatformTasks,
   pollAiPlatformTasks,
-  uploadLitterboxReferences,
+  uploadTemporaryReferences,
 } from "./ai-platform.js";
 
 const app = express();
@@ -97,6 +98,7 @@ const directDispatcher = new Agent({
   headersTimeout: UPSTREAM_HEADERS_TIMEOUT_MS,
   bodyTimeout: UPSTREAM_BODY_TIMEOUT_MS,
 });
+const temporaryUploadDispatcher = new EnvHttpProxyAgent();
 let historyWriteQueue = Promise.resolve();
 
 app.use((request, response, next) => {
@@ -1281,47 +1283,55 @@ async function downloadAiPlatformImages(urls, signal) {
 async function executeAiPlatformJob({ historyId, payload, sourceBody, referenceFiles = [], taskIds = [], controller }) {
   const ext = buildAiPlatformExt(payload, sourceBody);
   let upstreamTaskIds = taskIds.map(String).filter(Boolean);
-  if (!upstreamTaskIds.length) {
-    const referenceUrls = referenceFiles.length
-      ? await uploadLitterboxReferences(referenceFiles, {
-          signal: controller.signal,
-          dispatcher: directDispatcher,
-        })
-      : [];
-    upstreamTaskIds = await createAiPlatformTasks({
-      ext,
-      count: payload.n,
-      referenceUrls,
+  let temporaryReferenceUrls = [];
+  try {
+    if (!upstreamTaskIds.length) {
+      temporaryReferenceUrls = referenceFiles.length
+        ? await uploadTemporaryReferences(referenceFiles, {
+            signal: controller.signal,
+            dispatcher: temporaryUploadDispatcher,
+          })
+        : [];
+      upstreamTaskIds = await createAiPlatformTasks({
+        ext,
+        count: payload.n,
+        referenceUrls: temporaryReferenceUrls,
+        signal: controller.signal,
+        dispatcher: directDispatcher,
+      });
+      await updateHistory(historyId, (item) => ({
+        ...item,
+        upstreamTaskIds,
+      }));
+    }
+
+    const result = await pollAiPlatformTasks(upstreamTaskIds, {
       signal: controller.signal,
       dispatcher: directDispatcher,
     });
-    await updateHistory(historyId, (item) => ({
+    const historyImages = await downloadAiPlatformImages(result.urls, controller.signal);
+    const completedAt = new Date().toISOString();
+    const updated = await updateHistory(historyId, (item) => ({
       ...item,
-      upstreamTaskIds,
+      status: "success",
+      completedAt,
+      durationMs: item.startedAt ? Date.now() - new Date(item.startedAt).getTime() : item.durationMs,
+      images: historyImages,
+      usage: result.useTokens == null ? undefined : { total_tokens: result.useTokens },
+      error: null,
     }));
+    return {
+      created: Math.floor(new Date(completedAt).getTime() / 1000),
+      images: historyImages,
+      usage: updated?.usage,
+      historyId,
+    };
+  } finally {
+    if (temporaryReferenceUrls.length) {
+      const cleanup = await cleanupTemporaryReferences(temporaryReferenceUrls, { dispatcher: temporaryUploadDispatcher });
+      if (cleanup.failed) console.warn(`Failed to clean up ${cleanup.failed} temporary Filebin reference(s).`);
+    }
   }
-
-  const result = await pollAiPlatformTasks(upstreamTaskIds, {
-    signal: controller.signal,
-    dispatcher: directDispatcher,
-  });
-  const historyImages = await downloadAiPlatformImages(result.urls, controller.signal);
-  const completedAt = new Date().toISOString();
-  const updated = await updateHistory(historyId, (item) => ({
-    ...item,
-    status: "success",
-    completedAt,
-    durationMs: item.startedAt ? Date.now() - new Date(item.startedAt).getTime() : item.durationMs,
-    images: historyImages,
-    usage: result.useTokens == null ? undefined : { total_tokens: result.useTokens },
-    error: null,
-  }));
-  return {
-    created: Math.floor(new Date(completedAt).getTime() / 1000),
-    images: historyImages,
-    usage: updated?.usage,
-    historyId,
-  };
 }
 
 async function failAiPlatformHistory(historyId, error) {
