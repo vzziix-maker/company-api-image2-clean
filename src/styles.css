@@ -408,6 +408,7 @@
 }
 
 .preview-panel {
+  container: preview-panel / inline-size;
   display: flex;
   flex-direction: column;
   align-items: stretch;
@@ -793,6 +794,13 @@
   white-space: nowrap;
 }
 
+.submit-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .submit-button {
   min-width: 180px;
   min-height: 40px;
@@ -856,6 +864,46 @@
   align-content: center;
   min-height: 0;
   overflow: hidden;
+}
+
+.results-grid.is-many {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.results-grid.is-many .result-actions {
+  gap: 4px;
+  padding: 6px;
+}
+
+.results-grid.is-many .result-actions > span {
+  display: none;
+}
+
+.results-grid.is-many .result-action-buttons {
+  flex: 1 1 auto;
+  flex-wrap: nowrap;
+  justify-content: center;
+  gap: 4px;
+}
+
+.results-grid.is-many .result-action-buttons [data-slot="button"] {
+  width: 26px;
+  height: 26px;
+  min-height: 26px;
+  padding: 0;
+}
+
+.results-grid.is-many .result-action-label {
+  display: none;
+}
+
+@container preview-panel (max-width: 600px) {
+  .results-grid.is-many {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: repeat(4, minmax(0, 1fr));
+  }
 }
 
 .result-card {
@@ -1220,6 +1268,17 @@
   min-width: 0;
 }
 
+.history-thumbs.is-many {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.history-thumbs.is-many .history-thumb-button {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+}
+
 .history-thumb-wrap {
   position: relative;
   flex: 0 0 auto;
@@ -1390,6 +1449,15 @@
   .image-slot-grid,
   .submit-row {
     grid-template-columns: 1fr;
+  }
+
+  .submit-actions {
+    justify-content: stretch;
+  }
+
+  .submit-actions .submit-button {
+    flex: 1 1 auto;
+    min-width: 0;
   }
 
   .sticky-submit {

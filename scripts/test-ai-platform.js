@@ -264,22 +264,22 @@ try {
     quality: "medium",
     outputFormat: "png",
     background: "auto",
-    count: "2",
+    count: "8",
   }).forEach(([key, value]) => editForm.set(key, value));
   editForm.append("image[]", new File([pngBuffer(800, 1200)], "first.png", { type: "image/png" }));
   editForm.append("image[]", new File([pngBuffer(1200, 800)], "second.png", { type: "image/png" }));
   const edited = await api("/api/edit", { method: "POST", body: editForm });
-  assert.equal(edited.images.length, 2);
+  assert.equal(edited.images.length, 8);
 
   const editHistory = (await historyItems()).find((item) => item.id === "ai-platform-edit");
   assert.equal(editHistory.status, "success");
   assert.equal(editHistory.source.images.length, 2);
-  assert.equal(editHistory.images.length, 2);
-  assert.deepEqual(editHistory.upstreamTaskIds.map(String).length, 2);
+  assert.equal(editHistory.images.length, 8);
+  assert.deepEqual(editHistory.upstreamTaskIds.map(String).length, 8);
   assert.equal(litterboxRequests.length, 2);
   assert.ok(litterboxRequests.every((entry) => entry.hasTwelveHours && entry.hasFile));
   const editCreates = createRequests.filter((entry) => entry.ext?.prompt === "two temporary references");
-  assert.equal(editCreates.length, 2);
+  assert.equal(editCreates.length, 8);
   assert.deepEqual(editCreates[0].ext.image_url, [
     "https://litter.catbox.moe/test-1.png",
     "https://litter.catbox.moe/test-2.png",

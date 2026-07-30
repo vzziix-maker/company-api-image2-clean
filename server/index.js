@@ -1038,8 +1038,8 @@ function buildPayload(body, mode, options = {}) {
     error.status = 400;
     throw error;
   }
-  if (!Number.isInteger(count) || count < 1 || count > 4) {
-    const error = new Error("count must be an integer from 1 to 4.");
+  if (!Number.isInteger(count) || count < 1 || count > 8) {
+    const error = new Error("count must be an integer from 1 to 8.");
     error.status = 400;
     throw error;
   }

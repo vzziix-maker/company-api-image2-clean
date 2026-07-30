@@ -167,7 +167,7 @@ try {
       quality: "high",
       outputFormat: "jpeg",
       background: "auto",
-      count: 3,
+      count: 8,
     }),
   });
   const generateData = await generateResponse.json();
@@ -265,8 +265,8 @@ try {
   const smartPresetPayload = editPayloads[2];
   const ok =
     generateResponse.status === 200 &&
-    generateData.images?.length === 3 &&
-    generatePayload?.n === 3 &&
+    generateData.images?.length === 8 &&
+    generatePayload?.n === 8 &&
     generatePayload?.size === "2048x1152" &&
     generatePayload?.quality === "high" &&
     generatePayload?.output_format === "jpeg" &&

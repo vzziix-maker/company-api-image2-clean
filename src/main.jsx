@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { AlertCircleIcon, ArrowUpIcon, EyeIcon, EyeOffIcon, SettingsIcon, StarIcon, UploadIcon } from "lucide-react";
+import { AlertCircleIcon, ArrowUpIcon, CopyIcon, DownloadIcon, EyeIcon, EyeOffIcon, ImagePlusIcon, RotateCcwIcon, SaveIcon, SettingsIcon, StarIcon, UploadIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -43,7 +43,7 @@ const sizeModeOptions = [
   { value: "ratio", label: "比例+分辨率" },
 ];
 const qualityOptions = ["low", "medium", "high", "auto"];
-const countOptions = [1, 2, 3, 4];
+const countOptions = [1, 2, 3, 4, 8];
 const aspectRatioOptions = [SMART_ASPECT_RATIO_VALUE, "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"];
 const resolutionOptions = ["1K", "2K", "4K"];
 const CLIENT_TIMEOUT_MS = 3610000;
@@ -52,6 +52,7 @@ const HISTORY_PAGE_SIZE = 30;
 const HISTORY_FILTER_FADE_MS = 80;
 const MAX_EDIT_IMAGES = 5;
 const SETTINGS_STORAGE_KEY = "deerapi-gpt-image-2-settings-v1";
+const NEW_WORKSPACE_DEFAULTS_STORAGE_KEY = "deerapi-gpt-image-2-new-workspace-defaults-v1";
 const PANEL_WIDTHS_STORAGE_KEY = "deerapi-gpt-image-2-panel-widths-v1";
 const MIN_PIXELS = 655360;
 const MAX_PIXELS = 8294400;
@@ -112,6 +113,55 @@ function createRefreshConfig(model = initialConfig.model) {
     background: "auto",
     count: 4,
   };
+}
+
+function createNewWorkspaceDefaults(config = initialConfig) {
+  const fallback = createRefreshConfig(config.model);
+  return {
+    model: config.model || fallback.model,
+    prompt: "",
+    sizeMode: config.sizeMode || fallback.sizeMode,
+    size: config.size || fallback.size,
+    quality: config.quality || fallback.quality,
+    outputFormat: config.outputFormat || fallback.outputFormat,
+    background: config.background || fallback.background,
+    count: Number(config.count) || fallback.count,
+    aspectRatio: config.aspectRatio || fallback.aspectRatio,
+    resolution: config.resolution || fallback.resolution,
+  };
+}
+
+function loadNewWorkspaceDefaults(model = initialConfig.model) {
+  if (typeof window === "undefined") return createRefreshConfig(model);
+
+  try {
+    const rawDefaults = window.localStorage?.getItem(NEW_WORKSPACE_DEFAULTS_STORAGE_KEY);
+    if (!rawDefaults) return createRefreshConfig(model);
+    return createNewWorkspaceDefaults({
+      ...createRefreshConfig(model),
+      ...JSON.parse(rawDefaults),
+    });
+  } catch {
+    return createRefreshConfig(model);
+  }
+}
+
+function saveNewWorkspaceDefaultsLocally(config) {
+  try {
+    window.localStorage?.setItem(NEW_WORKSPACE_DEFAULTS_STORAGE_KEY, JSON.stringify(config));
+    return Boolean(window.localStorage);
+  } catch {
+    return false;
+  }
+}
+
+function clearNewWorkspaceDefaultsLocally() {
+  try {
+    window.localStorage?.removeItem(NEW_WORKSPACE_DEFAULTS_STORAGE_KEY);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function createWorkspace({ mode = "generate", config = initialConfig, statusKind = "idle" } = {}) {
@@ -1388,7 +1438,7 @@ function ImageResults({ images, outputFormat, generatedAt, loading, elapsedSecon
   }
 
   return (
-    <div className="results-grid">
+    <div className={cn("results-grid", images.length > 4 && "is-many")}>
         {images.map((image, imageIndex) => {
           const src = buildImageSrc(image, outputFormat);
           const alt = `Result ${image.index + 1}`;
@@ -1401,10 +1451,19 @@ function ImageResults({ images, outputFormat, generatedAt, loading, elapsedSecon
                 <span>#{image.index + 1}</span>
                 <div className="result-action-buttons">
                   <Button asChild variant="outline" size="sm">
-                    <a href={src} download={createImageDownloadFilename({ imageIndex: image.index, outputFormat, generatedAt })}>下载</a>
+                    <a
+                      href={src}
+                      download={createImageDownloadFilename({ imageIndex: image.index, outputFormat, generatedAt })}
+                      aria-label={`下载第 ${image.index + 1} 张图片`}
+                      title="下载"
+                    >
+                      <DownloadIcon aria-hidden="true" />
+                      <span className="result-action-label">下载</span>
+                    </a>
                   </Button>
-                  <Button variant="outline" size="sm" type="button" onClick={() => onCopy?.(image, outputFormat)}>
-                    复制
+                  <Button variant="outline" size="sm" type="button" aria-label={`复制第 ${image.index + 1} 张图片`} title="复制" onClick={() => onCopy?.(image, outputFormat)}>
+                    <CopyIcon aria-hidden="true" />
+                    <span className="result-action-label">复制</span>
                   </Button>
                   <Button
                     className={cn("result-favorite-button", image.favorite && "is-favorite")}
@@ -1412,13 +1471,16 @@ function ImageResults({ images, outputFormat, generatedAt, loading, elapsedSecon
                     size="sm"
                     type="button"
                     aria-pressed={image.favorite === true}
+                    aria-label={image.favorite ? `取消收藏第 ${image.index + 1} 张图片` : `收藏第 ${image.index + 1} 张图片`}
+                    title={image.favorite ? "取消收藏" : "收藏"}
                     onClick={() => onFavorite?.(image, imageIndex)}
                   >
                     <StarIcon aria-hidden="true" />
-                    {image.favorite ? "已收藏" : "收藏"}
+                    <span className="result-action-label">{image.favorite ? "已收藏" : "收藏"}</span>
                   </Button>
-                  <Button variant="outline" size="sm" type="button" onClick={() => onImport?.(image, outputFormat)}>
-                    导入
+                  <Button variant="outline" size="sm" type="button" aria-label={`导入第 ${image.index + 1} 张图片`} title="导入" onClick={() => onImport?.(image, outputFormat)}>
+                    <ImagePlusIcon aria-hidden="true" />
+                    <span className="result-action-label">导入</span>
                   </Button>
                 </div>
               </div>
@@ -1692,8 +1754,8 @@ function HistoryPanel({
               </div>
               <p>{item.config?.prompt || item.error?.message || "无 prompt"}</p>
               {!!item.images?.length && (
-                <div className="history-thumbs">
-                  {item.images.slice(0, 4).map((image, imageIndex) => {
+                <div className={cn("history-thumbs", item.images.length > 4 && "is-many")}>
+                  {item.images.slice(0, 8).map((image, imageIndex) => {
                     const src = buildImageSrc(image, item.config?.outputFormat || "png");
                     const displayIndex = Number.isInteger(image.index) ? image.index : imageIndex;
                     const alt = `历史结果 ${displayIndex + 1}`;
@@ -1841,6 +1903,10 @@ function PanelResizeHandle({ label, onResizeStart }) {
 
 function App({ initialSettings }) {
   const savedSettingsRef = useRef(initialSettings || loadSavedSettings());
+  const newWorkspaceDefaultsRef = useRef(null);
+  if (!newWorkspaceDefaultsRef.current) {
+    newWorkspaceDefaultsRef.current = loadNewWorkspaceDefaults(savedSettingsRef.current.config?.model);
+  }
   const initialWorkspaceRef = useRef(null);
   if (!initialWorkspaceRef.current) {
     initialWorkspaceRef.current = createWorkspace({
@@ -2987,9 +3053,41 @@ function App({ initialSettings }) {
   }
 
   function createNewWorkspace() {
-    const workspace = createRefreshWorkspace(config.model);
+    const workspace = createWorkspace({
+      config: {
+        ...newWorkspaceDefaultsRef.current,
+        model: config.model,
+      },
+    });
     setWorkspaces((current) => [workspace, ...current]);
     setActiveWorkspaceId(workspace.id);
+  }
+
+  function saveCurrentParametersAsDefault() {
+    const nextDefaults = createNewWorkspaceDefaults(config);
+    if (!saveNewWorkspaceDefaultsLocally(nextDefaults)) {
+      showToast("默认参数保存失败。", "error");
+      return;
+    }
+    newWorkspaceDefaultsRef.current = nextDefaults;
+    showToast("已保存为新建默认参数。", "success");
+  }
+
+  function restoreFactoryParameters() {
+    const factoryDefaults = createRefreshConfig(config.model);
+    if (!clearNewWorkspaceDefaultsLocally()) {
+      showToast("默认参数恢复失败。", "error");
+      return;
+    }
+    newWorkspaceDefaultsRef.current = factoryDefaults;
+    updateActiveWorkspace((workspace) => ({
+      ...workspace,
+      config: {
+        ...factoryDefaults,
+        prompt: workspace.config.prompt,
+      },
+    }));
+    showToast("已恢复系统默认参数。", "success");
   }
 
   function createPreviewWorkspaceFromHistory(item) {
@@ -3532,9 +3630,27 @@ function App({ initialSettings }) {
               <strong>{mode === "generate" ? "生图" : "改图"}</strong>
               <span>{resolvedSize} · {config.quality}</span>
             </div>
-            <Button className="submit-button" size="lg" type="submit" disabled={rateLimitRemaining > 0 || submitLockRemaining > 0}>
-              {rateLimitRemaining > 0 ? `限流等待 ${rateLimitRemaining}s` : "生成图片"}
-            </Button>
+            <div className="submit-actions">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="outline" size="icon-lg" type="button" aria-label="恢复默认参数" onClick={restoreFactoryParameters}>
+                    <RotateCcwIcon aria-hidden="true" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="top">恢复默认</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="outline" size="icon-lg" type="button" aria-label="保存为默认参数" onClick={saveCurrentParametersAsDefault}>
+                    <SaveIcon aria-hidden="true" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="top">保存为默认参数</TooltipContent>
+              </Tooltip>
+              <Button className="submit-button" size="lg" type="submit" disabled={rateLimitRemaining > 0 || submitLockRemaining > 0}>
+                {rateLimitRemaining > 0 ? `限流等待 ${rateLimitRemaining}s` : "生成图片"}
+              </Button>
+            </div>
           </div>
           <PanelResizeHandle label="参数区" onResizeStart={(event) => startPanelResize("control", event)} />
         </section>
