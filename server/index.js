@@ -57,6 +57,7 @@ const UPSTREAM_BODY_TIMEOUT_MS = Number(
 const HISTORY_LIMIT = Number(process.env.HISTORY_LIMIT || 500);
 const DEFAULT_HISTORY_PAGE_SIZE = 30;
 const MAX_HISTORY_PAGE_SIZE = 100;
+const MAX_GENERATED_IMAGE_SIZE = 25 * 1024 * 1024;
 const DATA_DIR = process.env.APP_DATA_DIR
   ? pathToFileURL(`${resolve(process.env.APP_DATA_DIR)}/`)
   : new URL("../.data/", import.meta.url);
@@ -261,6 +262,21 @@ async function saveGeneratedImageAsset(image, outputFormat = "png", prefix = "re
 
 async function saveGeneratedImages(images = [], outputFormat = "png", prefix = "result") {
   return Promise.all(images.map((image, index) => saveGeneratedImageAsset({ index, ...image }, outputFormat, prefix)));
+}
+
+async function saveGeneratedBufferAsset(image, prefix = "result") {
+  const filename = prefix + "-" + randomUUID() + "." + (image.format === "jpeg" ? "jpg" : image.format);
+  await mkdir(HISTORY_ASSETS_DIR, { recursive: true });
+  await writeFile(new URL(filename, HISTORY_ASSETS_DIR), image.buffer);
+
+  return {
+    index: image.index,
+    id: filename,
+    url: assetUrl(filename),
+    revised_prompt: image.revised_prompt,
+    type: "image/" + image.format,
+    size: image.buffer.length,
+  };
 }
 
 async function migrateInlineHistoryImages(items) {
@@ -891,6 +907,13 @@ function getImageDimensions(file) {
   return getPngDimensions(buffer) || getJpegDimensions(buffer) || getWebpDimensions(buffer);
 }
 
+function detectGeneratedImageFormat(buffer) {
+  if (getPngDimensions(buffer)) return "png";
+  if (getJpegDimensions(buffer)) return "jpeg";
+  if (getWebpDimensions(buffer)) return "webp";
+  return "";
+}
+
 function resolveSmartAspectRatio(mode, referenceDimensions) {
   return mode === "edit" ? aspectRatioFromDimensions(referenceDimensions) : DEFAULT_SMART_ASPECT_RATIO;
 }
@@ -1106,6 +1129,94 @@ function toClientResponse(data) {
     })),
     raw: data,
   };
+}
+
+function providerImageError(message, code) {
+  const error = new Error(message);
+  error.status = 502;
+  error.code = code;
+  return error;
+}
+
+async function resolveProviderImageUrl(value, providerBaseUrl) {
+  let url;
+  try {
+    url = new URL(value, providerBaseUrl.replace(/\/$/, "") + "/");
+  } catch {
+    throw providerImageError("图片服务返回了无效的结果地址。", "invalid_provider_image_url");
+  }
+  if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password) {
+    throw providerImageError("图片服务返回了不受支持的结果地址。", "invalid_provider_image_url");
+  }
+  try {
+    await assertProviderBaseUrlAllowed(url.origin);
+  } catch (error) {
+    if (error.code === "invalid_provider_base_url") {
+      throw providerImageError("图片服务返回的结果地址指向本机或私有网络，已拒绝下载。", "invalid_provider_image_url");
+    }
+    throw error;
+  }
+  return url;
+}
+
+async function downloadProviderImageAsset(image, provider, signal, prefix) {
+  const url = await resolveProviderImageUrl(image.url, provider.baseUrl);
+  let response;
+  try {
+    response = await fetchDeer(
+      url,
+      { headers: { Accept: "image/png,image/jpeg,image/webp" } },
+      signal,
+      url.origin,
+    );
+  } catch (error) {
+    if (error.code === "invalid_provider_base_url") {
+      throw providerImageError("图片服务返回的结果地址指向本机或私有网络，已拒绝下载。", "invalid_provider_image_url");
+    }
+    throw error;
+  }
+  if (!response.ok) {
+    throw providerImageError("生成结果下载失败（HTTP " + response.status + "）。", "provider_image_download_failed");
+  }
+
+  const contentType = (response.headers.get("content-type") || "").split(";", 1)[0].trim().toLowerCase();
+  if (!contentType.startsWith("image/")) {
+    throw providerImageError("图片服务返回的结果不是图片。", "invalid_provider_image_content");
+  }
+  const contentLength = Number(response.headers.get("content-length") || 0);
+  if (contentLength > MAX_GENERATED_IMAGE_SIZE) {
+    throw providerImageError("生成结果图片超过 25MB，已停止下载。", "provider_image_too_large");
+  }
+
+  const buffer = Buffer.from(await response.arrayBuffer());
+  if (buffer.length > MAX_GENERATED_IMAGE_SIZE) {
+    throw providerImageError("生成结果图片超过 25MB，已停止保存。", "provider_image_too_large");
+  }
+  const format = detectGeneratedImageFormat(buffer);
+  if (!format) {
+    throw providerImageError("图片服务返回的内容无法识别为 PNG、JPEG 或 WebP 图片。", "invalid_provider_image_content");
+  }
+  return saveGeneratedBufferAsset({
+    index: image.index,
+    buffer,
+    format,
+    revised_prompt: image.revised_prompt,
+  }, prefix);
+}
+
+async function materializeProviderImages(images, provider, signal, outputFormat, prefix = "result") {
+  return Promise.all(
+    images.map((image, index) => {
+      const normalized = { index, ...image };
+      if (normalized.b64_json) {
+        return saveGeneratedImageAsset(normalized, outputFormat, prefix);
+      }
+      if (normalized.url) {
+        return downloadProviderImageAsset(normalized, provider, signal, prefix);
+      }
+      throw providerImageError("图片服务没有返回可用的图片数据。", "invalid_provider_image_content");
+    }),
+  );
 }
 
 function payloadToUiConfig(payload, source = {}) {
@@ -1684,7 +1795,13 @@ app.post("/api/generate", async (request, response, next) => {
 
     const data = await parseDeerResponse(deerResponse);
     const clientData = toClientResponse(data);
-    const historyImages = await saveGeneratedImages(clientData.images, payload.output_format, "result");
+    const historyImages = await materializeProviderImages(
+      clientData.images,
+      provider,
+      controller.signal,
+      payload.output_format,
+      "result",
+    );
     await updateHistory(history.id, (item) => ({
       ...item,
       status: "success",
@@ -1693,7 +1810,7 @@ app.post("/api/generate", async (request, response, next) => {
       images: historyImages,
       usage: clientData.usage,
     }));
-    sendJsonIfOpen(response, { ...clientData, historyId: history.id });
+    sendJsonIfOpen(response, { ...clientData, images: historyImages, historyId: history.id });
   } catch (caughtError) {
     const error = controller.signal.aborted && !isCanceledJobError(caughtError) ? canceledJobError() : caughtError;
     if (history) {
@@ -1826,7 +1943,13 @@ app.post(
 
       const data = await parseDeerResponse(deerResponse);
       const clientData = toClientResponse(data);
-      const historyImages = await saveGeneratedImages(clientData.images, payload.output_format, "result");
+      const historyImages = await materializeProviderImages(
+        clientData.images,
+        provider,
+        controller.signal,
+        payload.output_format,
+        "result",
+      );
       await updateHistory(history.id, (item) => ({
         ...item,
         status: "success",
@@ -1835,7 +1958,7 @@ app.post(
         images: historyImages,
         usage: clientData.usage,
       }));
-      sendJsonIfOpen(response, { ...clientData, historyId: history.id });
+      sendJsonIfOpen(response, { ...clientData, images: historyImages, historyId: history.id });
     } catch (caughtError) {
       const error = controller.signal.aborted && !isCanceledJobError(caughtError) ? canceledJobError() : caughtError;
       if (history) {

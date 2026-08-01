@@ -29,6 +29,7 @@ import {
   updateCompletionReminderBatch,
 } from "./notification-reminders.js";
 import { createApiSubmissionConfig, restoreSmartConfigFromReference } from "./history-config.js";
+import { resolveTrustedImageSource } from "./image-source-policy.js";
 import { loadReferenceImageDraft, saveReferenceImageDraft } from "./reference-image-draft-storage.js";
 import "./styles.css";
 
@@ -535,11 +536,14 @@ function outputMimeType(outputFormat = "png") {
 }
 
 async function blobFromImageSrc(src, outputFormat = "png") {
-  const response = await fetch(src);
+  const response = await fetch(resolveTrustedImageSource(src, window.location.origin));
   if (!response.ok) {
     throw new Error("无法读取图片。");
   }
   const blob = await response.blob();
+  if (blob.type && !blob.type.startsWith("image/")) {
+    throw new Error("图片内容格式无效，无法复制或导入。");
+  }
   return blob.type ? blob : new Blob([blob], { type: outputMimeType(outputFormat) });
 }
 

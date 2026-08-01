@@ -23,7 +23,10 @@
     "test:provider-profiles": "node scripts/test-provider-profiles.js",
     "test:ai-platform": "node scripts/test-ai-platform.js",
     "test:submit-errors": "node scripts/test-submit-error-copy.js",
-    "test:security": "node scripts/test-security-controls.js"
+    "test:security": "node scripts/test-security-controls.js",
+    "test:provider-results": "node scripts/test-provider-result-security.js",
+    "test:loopback-host": "node scripts/test-loopback-host.js",
+    "test:image-source-policy": "node scripts/test-image-source-policy.js"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.2.9",
@@ -35,7 +38,7 @@
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
     "lucide-react": "^1.21.0",
-    "multer": "^2.0.2",
+    "multer": "^2.2.0",
     "radix-ui": "^1.6.0",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",

@@ -47,8 +47,10 @@ PORT=43297 npm run dev:server
 另开一个终端：
 
 ```bash
-VITE_API_PROXY_TARGET=http://localhost:43297 npm run dev:client -- --host 0.0.0.0 --port 43288
+VITE_API_PROXY_TARGET=http://127.0.0.1:43297 npm run dev:client -- --port 43288
 ```
+
+前端和 API 始终只监听本机回环地址，不支持通过局域网 IP 或 0.0.0.0 对外提供服务。
 
 ## API Settings
 
