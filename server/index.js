@@ -6,7 +6,7 @@ import { lookup } from "node:dns/promises";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { isIP } from "node:net";
 import { extname, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import multer from "multer";
 import { Agent, EnvHttpProxyAgent, interceptors } from "undici";
 import {
@@ -18,6 +18,7 @@ import {
   pollAiPlatformTasks,
   uploadTemporaryReferences,
 } from "./ai-platform.js";
+import { HistoryStore, MAX_HISTORY_LIMIT } from "./history-store.js";
 
 const app = express();
 const MAX_EDIT_IMAGES = 5;
@@ -54,7 +55,7 @@ const UPSTREAM_HEADERS_TIMEOUT_MS = Number(
 const UPSTREAM_BODY_TIMEOUT_MS = Number(
   process.env.IMAGE_API_BODY_TIMEOUT_MS || process.env.DEER_API_BODY_TIMEOUT_MS || REQUEST_TIMEOUT_MS
 );
-const HISTORY_LIMIT = Number(process.env.HISTORY_LIMIT || 500);
+const HISTORY_LIMIT = Math.min(MAX_HISTORY_LIMIT, Number(process.env.HISTORY_LIMIT || MAX_HISTORY_LIMIT));
 const DEFAULT_HISTORY_PAGE_SIZE = 30;
 const MAX_HISTORY_PAGE_SIZE = 100;
 const MAX_GENERATED_IMAGE_SIZE = 25 * 1024 * 1024;
@@ -63,6 +64,8 @@ const DATA_DIR = process.env.APP_DATA_DIR
   : new URL("../.data/", import.meta.url);
 const HISTORY_DIR = DATA_DIR;
 const HISTORY_FILE = new URL("history.json", DATA_DIR);
+const HISTORY_DB_FILE = new URL("history.sqlite", DATA_DIR);
+const HISTORY_MIGRATION_MARKER = new URL("history-json-migration-v1.complete", DATA_DIR);
 const SETTINGS_FILE = new URL("settings.json", DATA_DIR);
 const HISTORY_ASSETS_DIR = new URL("history-assets/", DATA_DIR);
 const ALLOW_LOCAL_PROVIDER_URLS = process.env.ALLOW_LOCAL_PROVIDER_URLS === "1";
@@ -100,7 +103,7 @@ const directDispatcher = new Agent({
   bodyTimeout: UPSTREAM_BODY_TIMEOUT_MS,
 });
 const temporaryUploadDispatcher = new EnvHttpProxyAgent();
-let historyWriteQueue = Promise.resolve();
+let historyStore;
 
 app.use((request, response, next) => {
   if (isLoopbackAddress(request.socket.remoteAddress)) {
@@ -111,29 +114,6 @@ app.use((request, response, next) => {
 });
 
 app.use(express.json({ limit: "1mb" }));
-
-async function readHistory() {
-  try {
-    const text = await readFile(HISTORY_FILE, "utf8");
-    const parsed = JSON.parse(text);
-    if (!Array.isArray(parsed)) return [];
-
-    const { items, changed } = await migrateInlineHistoryImages(parsed);
-    if (changed) {
-      await writeHistory(items);
-    }
-    return items;
-  } catch (error) {
-    if (error.code === "ENOENT") return [];
-    throw error;
-  }
-}
-
-async function writeHistory(items) {
-  await mkdir(HISTORY_DIR, { recursive: true });
-  const limitedItems = Number.isFinite(HISTORY_LIMIT) ? items.slice(0, HISTORY_LIMIT) : items;
-  await writeFile(HISTORY_FILE, JSON.stringify(limitedItems, null, 2));
-}
 
 function numberInRange(value, fallback, min, max) {
   const number = Number(value);
@@ -146,32 +126,6 @@ function isLoopbackAddress(address = "") {
   return normalized === "::1" || normalized === "127.0.0.1" || normalized.startsWith("127.");
 }
 
-function paginateHistory(items, { cursor, limit }) {
-  const startIndex = cursor ? items.findIndex((item) => item.id === cursor) + 1 : 0;
-  const offset = startIndex > 0 ? startIndex : 0;
-  const pageItems = items.slice(offset, offset + limit);
-  const nextIndex = offset + pageItems.length;
-  return {
-    items: pageItems,
-    nextCursor: nextIndex < items.length ? pageItems.at(-1)?.id || null : null,
-    hasMore: nextIndex < items.length,
-    total: items.length,
-  };
-}
-
-function historyItemHasFavorite(item) {
-  return Boolean(
-    item?.images?.some((image) => image?.favorite === true) ||
-    item?.source?.images?.some((image) => image?.favorite === true),
-  );
-}
-
-function withHistoryWriteLock(operation) {
-  const nextOperation = historyWriteQueue.then(operation, operation);
-  historyWriteQueue = nextOperation.catch(() => {});
-  return nextOperation;
-}
-
 function normalizeHistoryId(value) {
   const id = String(value || "").trim();
   if (!/^[\w.-]{1,160}$/.test(id)) return "";
@@ -179,31 +133,19 @@ function normalizeHistoryId(value) {
 }
 
 async function appendHistory(entry) {
-  return withHistoryWriteLock(async () => {
-    const items = await readHistory();
-    const { id, ...restEntry } = entry;
-    const saved = {
-      id: normalizeHistoryId(id) || randomUUID(),
-      createdAt: new Date().toISOString(),
-      ...restEntry,
-    };
-    await writeHistory([saved, ...items.filter((item) => item.id !== saved.id)]);
-    return saved;
-  });
+  const { id, ...restEntry } = entry;
+  const saved = {
+    id: normalizeHistoryId(id) || randomUUID(),
+    createdAt: new Date().toISOString(),
+    ...restEntry,
+  };
+  const result = historyStore.append(saved);
+  if (result.evicted.length) await deleteHistoryAssets(result.evicted);
+  return saved;
 }
 
 async function updateHistory(id, updater) {
-  return withHistoryWriteLock(async () => {
-    const items = await readHistory();
-    let updatedItem = null;
-    const nextItems = items.map((item) => {
-      if (item.id !== id) return item;
-      updatedItem = typeof updater === "function" ? updater(item) : { ...item, ...updater };
-      return updatedItem;
-    });
-    await writeHistory(nextItems);
-    return updatedItem;
-  });
+  return historyStore.update(id, updater);
 }
 
 function sendJsonIfOpen(response, payload, status = 200) {
@@ -303,6 +245,40 @@ async function migrateInlineHistoryImages(items) {
   }
 
   return { items: migratedItems, changed };
+}
+
+async function initializeHistoryStorage() {
+  await mkdir(HISTORY_DIR, { recursive: true });
+  historyStore = new HistoryStore(fileURLToPath(HISTORY_DB_FILE), { limit: HISTORY_LIMIT });
+
+  try {
+    await readFile(HISTORY_MIGRATION_MARKER, "utf8");
+    return;
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+
+  let migratedCount = 0;
+  if (historyStore.count() === 0) {
+    try {
+      const text = await readFile(HISTORY_FILE, "utf8");
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) {
+        const migrated = await migrateInlineHistoryImages(parsed);
+        migratedCount = historyStore.importLegacy(migrated.items);
+      }
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  }
+
+  await writeFile(
+    HISTORY_MIGRATION_MARKER,
+    JSON.stringify({ completedAt: new Date().toISOString(), migratedCount }, null, 2),
+  );
+  if (migratedCount > 0) {
+    console.log(`Migrated ${migratedCount} history records from history.json to SQLite.`);
+  }
 }
 
 async function deleteHistoryAssets(items) {
@@ -1446,7 +1422,7 @@ async function executeAiPlatformJob({ historyId, payload, sourceBody, referenceF
 }
 
 async function failAiPlatformHistory(historyId, error) {
-  const item = (await readHistory()).find((entry) => entry.id === historyId);
+  const item = historyStore.get(historyId);
   if (!item || item.status !== "running") return;
   await updateHistory(historyId, (current) => ({
     ...current,
@@ -1465,10 +1441,7 @@ async function failAiPlatformHistory(historyId, error) {
 }
 
 async function resumeAiPlatformJobs() {
-  const items = await readHistory();
-  items
-    .filter((item) => item.status === "running" && item.providerId === AI_PLATFORM_PROVIDER_ID)
-    .forEach((item) => {
+  historyStore.listRunning(AI_PLATFORM_PROVIDER_ID).forEach((item) => {
       if (!Array.isArray(item.upstreamTaskIds) || !item.upstreamTaskIds.length || !item.requestPayload) {
         failAiPlatformHistory(item.id, new Error("服务重启时 AI中台任务尚未完成提交，请重新生成。")).catch(console.error);
         return;
@@ -1503,11 +1476,9 @@ app.get("/api/health", async (_request, response, next) => {
 
 app.get("/api/history", async (request, response, next) => {
   try {
-    const allItems = await readHistory();
-    const items = request.query.favorite === "1" ? allItems.filter(historyItemHasFavorite) : allItems;
     const limit = numberInRange(request.query.limit, DEFAULT_HISTORY_PAGE_SIZE, 1, MAX_HISTORY_PAGE_SIZE);
     const cursor = normalizeHistoryId(request.query.cursor);
-    response.json(paginateHistory(items, { cursor, limit }));
+    response.json(historyStore.page({ cursor, limit, favoriteOnly: request.query.favorite === "1" }));
   } catch (error) {
     next(error);
   }
@@ -1695,8 +1666,8 @@ app.post("/api/resolve-params", (request, response, next) => {
 
 app.delete("/api/history", async (_request, response, next) => {
   try {
-    await deleteHistoryAssets(await readHistory());
-    await writeHistory([]);
+    await rm(HISTORY_ASSETS_DIR, { recursive: true, force: true });
+    historyStore.clear();
     response.json({ ok: true });
   } catch (error) {
     next(error);
@@ -1710,10 +1681,11 @@ app.delete("/api/history/:id", async (request, response, next) => {
       activeJob.controller.abort();
       activeJobs.delete(request.params.id);
     }
-    const items = await readHistory();
-    const deletedItems = items.filter((item) => item.id === request.params.id);
-    await deleteHistoryAssets(deletedItems);
-    await writeHistory(items.filter((item) => item.id !== request.params.id));
+    const item = historyStore.get(request.params.id);
+    if (item) {
+      await deleteHistoryAssets([item]);
+      historyStore.delete(request.params.id);
+    }
     response.json({ ok: true });
   } catch (error) {
     next(error);
@@ -2010,6 +1982,8 @@ app.use((error, _request, response, _next) => {
     },
   });
 });
+
+await initializeHistoryStorage();
 
 app.listen(PORT, HOST, () => {
   console.log(`Image API server listening on http://${HOST}:${PORT}`);

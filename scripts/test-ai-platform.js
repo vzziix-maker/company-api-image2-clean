@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import Database from "better-sqlite3";
 import { cleanupTemporaryReferences, uploadTemporaryReferences } from "../server/ai-platform.js";
 
 const mockPort = 19931;
@@ -319,7 +320,9 @@ try {
   assert.equal(resumed.images.length, 1);
   assert.equal(resumed.upstreamTaskIds.every((id) => typeof id === "string"), true);
 
-  const historyText = await readFile(join(appDataDir, "history.json"), "utf8");
+  const historyDatabase = new Database(join(appDataDir, "history.sqlite"), { readonly: true });
+  const historyText = historyDatabase.prepare("SELECT GROUP_CONCAT(data, '') AS data FROM history_items").get().data || "";
+  historyDatabase.close();
   assert.equal(historyText.includes("litter.catbox.moe"), false);
 
   console.log(

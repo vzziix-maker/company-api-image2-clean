@@ -139,7 +139,8 @@ pet-runs/
 其中：
 
 - `.data/settings.json` 保存模型 Base URL / Key 和本地参数设置。
-- `.data/history.json` 保存历史记录元数据。
+- `.data/history.sqlite` 使用 SQLite 保存历史记录元数据，按需分页读取，最多支持 1 亿条记录（实际容量取决于磁盘空间）。
+- 旧版 `.data/history.json` 会在升级后首次启动时自动导入 SQLite，并作为迁移备份保留。
 - `.data/history-assets/` 保存历史生成图和参考图。
 - `.env.local` 可能保存私有 API Key。
 
