@@ -15,6 +15,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { ThinkingOrb } from "thinking-orbs";
 import { createImageDownloadFilename } from "./download-filenames.js";
 import { mergeRefreshedHistory } from "./history-refresh.js";
 import {
@@ -1748,8 +1749,16 @@ function HistoryPanel({
           {history.map((item) => (
             <Card className="history-item" data-history-id={item.id} key={item.id} size="sm">
               <div className="history-meta">
-                <Badge className="status-pill" variant={historyStatusVariant(item.status)}>
-                  {historyStatusLabel(item.status)}
+                <Badge
+                  className={cn("status-pill", item.status === "running" && "is-running")}
+                  variant={historyStatusVariant(item.status)}
+                >
+                  {item.status === "running" && (
+                    <ThinkingOrb className="history-thinking-orb" state="weaving" size={20} />
+                  )}
+                  {item.status === "running" ? (
+                    <span className="history-status-shimmer" data-text="生成中">生成中</span>
+                  ) : historyStatusLabel(item.status)}
                 </Badge>
                 <span>{item.mode === "generate" ? "生图" : "改图"}</span>
                 <span>{item.config?.resolvedSize || item.config?.size}</span>

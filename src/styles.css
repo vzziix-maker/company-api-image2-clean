@@ -1249,6 +1249,96 @@
   min-width: 42px;
 }
 
+.status-pill.is-running {
+  gap: 4px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: #fff;
+  overflow: visible;
+}
+
+.status-pill.is-running:hover {
+  background: transparent;
+  color: #fff;
+}
+
+.history-thinking-orb {
+  display: block;
+  flex: 0 0 20px;
+}
+
+.history-status-shimmer {
+  position: relative;
+  display: inline-flex;
+  height: 20px;
+  align-items: center;
+  padding: 0 9px;
+  border-radius: 9999px;
+  background-image: linear-gradient(
+    90deg,
+    rgb(251 251 251 / 50%) 0%,
+    rgb(251 251 251 / 50%) 40%,
+    #fff 50%,
+    rgb(251 251 251 / 50%) 60%,
+    rgb(251 251 251 / 50%) 100%
+  );
+  background-size: 400% 100%;
+  background-repeat: no-repeat;
+  background-clip: text;
+  color: transparent;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: history-status-shimmer 2s linear infinite;
+}
+
+.history-status-shimmer::after {
+  position: absolute;
+  inset: 0;
+  padding: 1px;
+  border-radius: inherit;
+  content: "";
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    rgb(255 255 255 / 14%) 0%,
+    rgb(255 255 255 / 14%) 40%,
+    rgb(255 255 255 / 30%) 50%,
+    rgb(255 255 255 / 14%) 60%,
+    rgb(255 255 255 / 14%) 100%
+  );
+  background-size: 400% 100%;
+  background-repeat: no-repeat;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: history-status-shimmer 2s linear infinite;
+}
+
+@keyframes history-status-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+
+  to {
+    background-position: 0% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .history-status-shimmer::after {
+    animation: none;
+    background-position: 50% 0;
+  }
+
+  .history-status-shimmer {
+    background: none;
+    color: rgb(251 251 251 / 70%);
+    -webkit-text-fill-color: currentColor;
+    animation: none;
+  }
+}
+
 .history-item p {
   display: -webkit-box;
   margin: 0;
