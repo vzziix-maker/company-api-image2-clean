@@ -2259,7 +2259,7 @@ function App({ initialSettings }) {
       const drag = resizeDragRef.current;
       if (!drag) return;
       const limits = panelWidthLimits[drag.panelKey];
-      const nextWidth = clamp(drag.startWidth + event.clientX - drag.startX, limits.min, limits.max);
+      const nextWidth = clamp(drag.startWidth - (event.clientX - drag.startX), limits.min, limits.max);
       setPanelWidths((current) => ({
         ...current,
         [drag.panelKey]: nextWidth,

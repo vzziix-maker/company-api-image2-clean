@@ -352,7 +352,7 @@
 .panel-resize-handle {
   position: absolute;
   top: 0;
-  right: 0;
+  left: 0;
   width: 12px;
   height: 100%;
   border: 0;
@@ -364,7 +364,7 @@
 .panel-resize-handle::after {
   position: absolute;
   top: 14px;
-  right: 5px;
+  left: 5px;
   bottom: 14px;
   width: 2px;
   border-radius: 999px;
