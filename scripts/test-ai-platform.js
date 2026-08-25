@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +11,7 @@ const mockPort = 19931;
 const appPort = 19932;
 const appDataDir = await mkdtemp(join(tmpdir(), "image2-ai-platform-"));
 const createRequests = [];
+const aiPlatformAuthHeaders = [];
 const litterboxRequests = [];
 const taskPrompts = new Map();
 const fallbackRequests = { litterbox: 0, uguu: 0, filebin: 0, filebinDeletes: 0 };
@@ -99,6 +100,7 @@ const mock = createServer(async (request, response) => {
   }
 
   if (request.url === "/v2/external/image/tencent/gpt-image2/create" && request.method === "POST") {
+    aiPlatformAuthHeaders.push(request.headers.authorization);
     const body = JSON.parse((await readBody(request)).toString("utf8"));
     taskIndex += 1;
     const taskId = String(9007199254741000n + BigInt(taskIndex));
@@ -110,6 +112,7 @@ const mock = createServer(async (request, response) => {
   }
 
   if (request.url?.startsWith("/v1/task/get")) {
+    aiPlatformAuthHeaders.push(request.headers.authorization);
     const taskId = new URL(request.url, `http://127.0.0.1:${mockPort}`).searchParams.get("task_id");
     const prompt = taskPrompts.get(taskId) || "";
     const running = prompt === "resume after restart" && !resumeMayFinish;
@@ -147,6 +150,14 @@ const mock = createServer(async (request, response) => {
 });
 
 await new Promise((resolve) => mock.listen(mockPort, "127.0.0.1", resolve));
+
+await writeFile(
+  join(appDataDir, "settings.json"),
+  JSON.stringify({
+    activeProviderId: "builtin-ai-platform",
+    aiPlatformApiKey: "sk-ai-platform-test",
+  }),
+);
 
 function startApp() {
   return spawn(process.execPath, ["server/index.js"], {
@@ -253,7 +264,16 @@ try {
 
   const providers = await api("/api/provider-settings");
   assert.equal(providers.provider.id, "builtin-ai-platform");
+  assert.equal(providers.provider.hasApiKey, true);
   assert.equal(providers.profiles[0].builtIn, true);
+  assert.equal(JSON.stringify(providers).includes("sk-ai-platform-test"), false);
+
+  const verified = await api("/api/provider-settings/verify", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: "builtin-ai-platform", apiKey: "sk-ai-platform-test" }),
+  });
+  assert.equal(verified.provider, "builtin-ai-platform");
 
   const editForm = new FormData();
   Object.entries({
@@ -324,6 +344,8 @@ try {
   const historyText = historyDatabase.prepare("SELECT GROUP_CONCAT(data, '') AS data FROM history_items").get().data || "";
   historyDatabase.close();
   assert.equal(historyText.includes("litter.catbox.moe"), false);
+  assert.equal(aiPlatformAuthHeaders.length > 0, true);
+  assert.equal(aiPlatformAuthHeaders.every((value) => value === "Bearer sk-ai-platform-test"), true);
 
   console.log(
     JSON.stringify(
@@ -335,6 +357,7 @@ try {
         editImages: editHistory.images.length,
         resumedTask: resumed.status,
         temporaryUrlsPersisted: false,
+        authenticatedRequests: aiPlatformAuthHeaders.length,
         fallbackRequests,
       },
       null,

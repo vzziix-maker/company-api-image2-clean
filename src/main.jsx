@@ -36,6 +36,7 @@ import "./styles.css";
 
 const SMART_SIZE_VALUE = "smart";
 const SMART_ASPECT_RATIO_VALUE = "smart";
+const AI_PLATFORM_PROVIDER_ID = "builtin-ai-platform";
 const SMART_LABEL = "智能";
 const DEFAULT_PRESET_SIZE = "1408x480";
 const DEFAULT_SMART_ASPECT_RATIO = "9:16";
@@ -753,6 +754,7 @@ function ProviderSettingsDialog({
   const draftProfile = profiles.find((profile) => profile.id === draft.id);
   const hasSavedKey = Boolean(draftProfile?.hasApiKey);
   const isEditing = Boolean(draft.id);
+  const isAiPlatform = draft.id === AI_PLATFORM_PROVIDER_ID;
   const [keyVisible, setKeyVisible] = useState(false);
 
   useEffect(() => {
@@ -776,33 +778,39 @@ function ProviderSettingsDialog({
     <Dialog open={open || editorOpen} onOpenChange={handleOpenChange}>
       <DialogContent className="provider-dialog">
         <DialogHeader>
-          <DialogTitle>{editorOpen ? (isEditing ? "修改 Key" : "新增 Key") : "模型设置"}</DialogTitle>
+          <DialogTitle>{editorOpen ? (isAiPlatform ? "配置 AI中台 Key" : isEditing ? "修改 Key" : "新增 Key") : "模型设置"}</DialogTitle>
           <DialogDescription>
             {editorOpen
-              ? isEditing
+              ? isAiPlatform
+                ? "填写个人 API Key，发送请求时会自动添加 Bearer 前缀。"
+                : isEditing
                 ? "Key 留空会保留原 Key；重新填写则替换。"
                 : "填写兼容 OpenAI 的 Base URL 和 Key。"
-              : "选择内置 AI中台，或管理兼容 OpenAI 的 Base URL 和 Key。"}
+              : "配置内置 AI中台，或管理兼容 OpenAI 的 Base URL 和 Key。"}
           </DialogDescription>
         </DialogHeader>
 
         {editorOpen ? (
           <>
             <div className="provider-form">
-              <Field label="名称">
-                <Input
-                  value={draft.name}
-                  onChange={(event) => onDraftChange({ ...draft, name: event.target.value })}
-                  placeholder="例如：公司 Key"
-                />
-              </Field>
-              <Field label="Base URL">
-                <Input
-                  value={draft.baseUrl}
-                  onChange={(event) => onDraftChange({ ...draft, baseUrl: event.target.value })}
-                  placeholder="https://example.com/v1"
-                />
-              </Field>
+              {!isAiPlatform && (
+                <>
+                  <Field label="名称">
+                    <Input
+                      value={draft.name}
+                      onChange={(event) => onDraftChange({ ...draft, name: event.target.value })}
+                      placeholder="例如：公司 Key"
+                    />
+                  </Field>
+                  <Field label="Base URL">
+                    <Input
+                      value={draft.baseUrl}
+                      onChange={(event) => onDraftChange({ ...draft, baseUrl: event.target.value })}
+                      placeholder="https://example.com/v1"
+                    />
+                  </Field>
+                </>
+              )}
               <Field label="Key">
                 <div className="provider-key-field">
                   <Input
@@ -841,25 +849,34 @@ function ProviderSettingsDialog({
               {profiles.length ? (
                 profiles.map((profile) => {
                   const active = provider?.id === profile.id;
+                  const requiresAiPlatformKey = profile.builtIn && !profile.hasApiKey;
                   return (
                     <div className="provider-list-item" key={profile.id}>
-                      <button className="provider-list-main" type="button" onClick={() => onUseProfile(profile.id)}>
+                      <button className="provider-list-main" type="button" onClick={() => (requiresAiPlatformKey ? onEdit(profile) : onUseProfile(profile.id))}>
                         <span className="provider-list-title">
                           {profile.name || profile.baseUrl}
                           {profile.builtIn && <Badge variant="outline">内置</Badge>}
                           {active && <Badge variant="secondary">当前</Badge>}
                         </span>
                         <span className="provider-list-url">
-                          {profile.builtIn ? "无需 Key · 参考图自动临时上传" : profile.baseUrl}
+                          {profile.builtIn
+                            ? profile.hasApiKey
+                              ? "已配置 Key · 参考图自动临时上传"
+                              : "需要配置 Key · 参考图自动临时上传"
+                            : profile.baseUrl}
                         </span>
                       </button>
                       <div className="provider-list-actions">
-                        {!active && (
+                        {!active && !requiresAiPlatformKey && (
                           <Button variant="outline" size="sm" type="button" disabled={busy === "select"} onClick={() => onUseProfile(profile.id)}>
                             使用
                           </Button>
                         )}
-                        {!profile.builtIn && (
+                        {profile.builtIn ? (
+                          <Button variant="outline" size="sm" type="button" onClick={() => onEdit(profile)}>
+                            {profile.hasApiKey ? "修改" : "配置"}
+                          </Button>
+                        ) : (
                           <>
                             <Button variant="outline" size="sm" type="button" onClick={() => onEdit(profile)}>
                               修改
@@ -2712,8 +2729,9 @@ function App({ initialSettings }) {
   }
 
   async function verifyProviderSettings() {
-    if (!providerDraft.baseUrl.trim() || (!providerDraft.apiKey.trim() && !providerDraftHasSavedKey())) {
-      setProviderResult({ tone: "error", message: "请先填写 Base URL 和 Key。" });
+    const isAiPlatform = providerDraft.id === AI_PLATFORM_PROVIDER_ID;
+    if ((!isAiPlatform && !providerDraft.baseUrl.trim()) || (!providerDraft.apiKey.trim() && !providerDraftHasSavedKey())) {
+      setProviderResult({ tone: "error", message: isAiPlatform ? "请先填写 AI中台 Key。" : "请先填写 Base URL 和 Key。" });
       return;
     }
     setProviderBusy("verify");
@@ -2726,8 +2744,9 @@ function App({ initialSettings }) {
         },
         body: JSON.stringify(providerDraft),
       });
-      setProviderResult({ tone: "success", message: "验证通过：已找到 gpt-image-2。" });
-      showToast("验证通过：已找到 gpt-image-2。", "success");
+      const message = isAiPlatform ? "验证通过：AI中台 Key 可用。" : "验证通过：已找到 gpt-image-2。";
+      setProviderResult({ tone: "success", message });
+      showToast(message, "success");
     } catch (error) {
       const message = error.message || "验证失败。";
       setProviderResult({ tone: "error", message });
@@ -2738,8 +2757,9 @@ function App({ initialSettings }) {
   }
 
   async function saveProviderSettings() {
-    if (!providerDraft.baseUrl.trim() || (!providerDraft.apiKey.trim() && !providerDraftHasSavedKey())) {
-      setProviderResult({ tone: "error", message: "请先填写 Base URL 和 Key。" });
+    const isAiPlatform = providerDraft.id === AI_PLATFORM_PROVIDER_ID;
+    if ((!isAiPlatform && !providerDraft.baseUrl.trim()) || (!providerDraft.apiKey.trim() && !providerDraftHasSavedKey())) {
+      setProviderResult({ tone: "error", message: isAiPlatform ? "请先填写 AI中台 Key。" : "请先填写 Base URL 和 Key。" });
       return;
     }
     setProviderBusy("save");
@@ -2771,6 +2791,10 @@ function App({ initialSettings }) {
     setProviderResult(null);
     const profile = providerProfiles.find((item) => item.id === id);
     if (!profile) return;
+    if (profile.builtIn && !profile.hasApiKey) {
+      await editProviderProfile(profile);
+      return;
+    }
     setProviderBusy("select");
     try {
       const data = await requestJson("/api/provider-settings/select", {

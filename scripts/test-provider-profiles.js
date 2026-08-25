@@ -109,6 +109,13 @@ try {
   const builtinId = initial.profiles?.find((profile) => profile.builtIn)?.id;
   const legacyId = initial.profiles?.find((profile) => !profile.builtIn)?.id;
 
+  const configuredBuiltin = await api("/api/provider-settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: builtinId, apiKey: "sk-ai-platform" }),
+  });
+  const builtinKey = await api(`/api/provider-settings/${builtinId}/key`);
+
   const created = await api("/api/provider-settings", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -151,13 +158,16 @@ try {
   const afterDeleteSecond = await api(`/api/provider-settings/${secondId}`, { method: "DELETE" });
   const afterDeleteLegacy = await api(`/api/provider-settings/${legacyId}`, { method: "DELETE" });
 
-  const responseText = JSON.stringify([initial, created, edited, afterDeleteSecond, afterDeleteLegacy]);
+  const responseText = JSON.stringify([initial, configuredBuiltin, created, edited, afterDeleteSecond, afterDeleteLegacy]);
   const ok =
     initial.profiles?.length === 2 &&
     initial.provider?.id === builtinId &&
     initial.provider?.builtIn === true &&
     initial.provider?.hasApiKey === false &&
     !initialText.includes("sk-legacy") &&
+    configuredBuiltin.provider?.id === builtinId &&
+    configuredBuiltin.provider?.hasApiKey === true &&
+    builtinKey.apiKey === "sk-ai-platform" &&
     created.profiles?.length === 3 &&
     created.provider?.id === secondId &&
     created.provider?.name === "备用 Key" &&
@@ -173,6 +183,7 @@ try {
     upstreamAuthHeaders.at(-1) === "Bearer sk-second" &&
     !responseText.includes("sk-legacy") &&
     !responseText.includes("sk-second") &&
+    !responseText.includes("sk-ai-platform") &&
     !responseText.includes("sk-env");
 
   console.log(

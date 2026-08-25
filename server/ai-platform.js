@@ -40,6 +40,15 @@ async function responseData(response, label) {
   const text = await response.text();
   const data = parseJson(text);
   if (!response.ok) {
+    if (response.status === 401) {
+      throw adapterError("AI中台 Key 无效，请检查后重试。", "ai_platform_auth_failed", 401, data);
+    }
+    if (response.status === 403) {
+      throw adapterError("当前 AI中台 Key 没有 GPT Image 2 接口权限。", "ai_platform_permission_denied", 403, data);
+    }
+    if (response.status === 503) {
+      throw adapterError("AI中台鉴权服务暂时不可用，请稍后重试。", "ai_platform_auth_unavailable", 503, data);
+    }
     throw adapterError(
       `${label}失败（HTTP ${response.status}）。`,
       "ai_platform_request_failed",
@@ -51,6 +60,13 @@ async function responseData(response, label) {
     throw adapterError(`${label}返回了无法解析的数据。`, "ai_platform_invalid_response", 502);
   }
   return data;
+}
+
+function authorizationHeaders(apiKey, headers = {}) {
+  if (!apiKey) {
+    throw adapterError("请先在模型设置中配置 AI中台 Key。", "ai_platform_api_key_required", 400);
+  }
+  return { ...headers, Authorization: `Bearer ${apiKey}` };
 }
 
 function parseSize(size) {
@@ -360,13 +376,24 @@ export async function cleanupTemporaryReferences(urls, options = {}) {
   };
 }
 
-export async function createAiPlatformTasks({ ext, count, referenceUrls = [], signal, fetchImpl = fetch, dispatcher }) {
+export async function verifyAiPlatformApiKey({ apiKey, signal, fetchImpl = fetch, dispatcher } = {}) {
+  const baseUrl = (process.env.AI_PLATFORM_BASE_URL || DEFAULT_AI_PLATFORM_BASE_URL).replace(/\/$/, "");
+  const response = await fetchImpl(`${baseUrl}/v1/task/get?task_id=0`, {
+    headers: authorizationHeaders(apiKey, { Accept: "application/json" }),
+    signal,
+    dispatcher,
+  });
+  await responseData(response, "AI中台 Key 验证");
+  return true;
+}
+
+export async function createAiPlatformTasks({ apiKey, ext, count, referenceUrls = [], signal, fetchImpl = fetch, dispatcher }) {
   const baseUrl = (process.env.AI_PLATFORM_BASE_URL || DEFAULT_AI_PLATFORM_BASE_URL).replace(/\/$/, "");
   return Promise.all(
     Array.from({ length: count }, async () => {
       const response = await fetchImpl(`${baseUrl}/v2/external/image/tencent/gpt-image2/create`, {
         method: "POST",
-        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        headers: authorizationHeaders(apiKey, { Accept: "application/json", "Content-Type": "application/json" }),
         body: JSON.stringify({
           ext: {
             ...ext,
@@ -394,13 +421,14 @@ async function pollAiPlatformTask(taskId, options) {
     dispatcher,
     pollIntervalMs = Number(process.env.AI_PLATFORM_POLL_INTERVAL_MS || 3000),
     timeoutMs = Number(process.env.AI_PLATFORM_TASK_TIMEOUT_MS || 3600000),
+    apiKey,
   } = options;
   const baseUrl = (process.env.AI_PLATFORM_BASE_URL || DEFAULT_AI_PLATFORM_BASE_URL).replace(/\/$/, "");
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
     const response = await fetchImpl(`${baseUrl}/v1/task/get?task_id=${encodeURIComponent(taskId)}`, {
-      headers: { Accept: "application/json" },
+      headers: authorizationHeaders(apiKey, { Accept: "application/json" }),
       signal,
       dispatcher,
     });

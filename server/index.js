@@ -17,6 +17,7 @@ import {
   createAiPlatformTasks,
   pollAiPlatformTasks,
   uploadTemporaryReferences,
+  verifyAiPlatformApiKey,
 } from "./ai-platform.js";
 import { HistoryStore, MAX_HISTORY_LIMIT } from "./history-store.js";
 
@@ -492,9 +493,10 @@ function getSavedProviderProfiles(settings = {}) {
   if (!profiles.length) {
     const legacy = sanitizeProviderSettings(settings.provider);
     if (legacy.baseUrl && legacy.apiKey) {
+      const legacyActiveId = normalizeHistoryId(settings.activeProviderId);
       addProfile(
         {
-          id: normalizeHistoryId(settings.activeProviderId) || "default",
+          id: legacyActiveId && legacyActiveId !== AI_PLATFORM_PROVIDER_ID ? legacyActiveId : "default",
           name: "默认 Key",
           ...legacy,
         },
@@ -510,9 +512,15 @@ function getProviderProfileState(settings = {}) {
   const profiles = getSavedProviderProfiles(settings);
   const requestedActiveId = normalizeHistoryId(settings.activeProviderId);
   const selectedProfile = profiles.find((profile) => profile.id === requestedActiveId);
-  const active = requestedActiveId === AI_PLATFORM_PROVIDER_ID || !selectedProfile ? AI_PLATFORM_PROVIDER : selectedProfile;
+  const aiPlatformProvider = {
+    ...AI_PLATFORM_PROVIDER,
+    apiKey: normalizeString(settings.aiPlatformApiKey, ""),
+    updatedAt: normalizeString(settings.aiPlatformUpdatedAt, ""),
+  };
+  const active = requestedActiveId === AI_PLATFORM_PROVIDER_ID || !selectedProfile ? aiPlatformProvider : selectedProfile;
   return {
     profiles,
+    aiPlatformProvider,
     active,
     activeProviderId: active.id,
   };
@@ -521,7 +529,7 @@ function getProviderProfileState(settings = {}) {
 async function readProviderSettings() {
   const settings = await readSettings();
   const { active } = getProviderProfileState(settings || {});
-  if (active.id === AI_PLATFORM_PROVIDER_ID) return AI_PLATFORM_PROVIDER;
+  if (active.id === AI_PLATFORM_PROVIDER_ID) return active;
   const fallback = getDefaultProviderSettings();
   return {
     ...active,
@@ -561,18 +569,18 @@ function publicProviderProfile(profile, activeProviderId) {
 }
 
 function publicProviderPayload(settings = {}) {
-  const { profiles, active, activeProviderId } = getProviderProfileState(settings);
+  const { profiles, aiPlatformProvider, active, activeProviderId } = getProviderProfileState(settings);
   const provider = active.id === AI_PLATFORM_PROVIDER_ID ? active : { ...active, source: "saved" };
   return {
     provider: publicProviderSettings(provider),
-    profiles: [AI_PLATFORM_PROVIDER, ...profiles].map((profile) => publicProviderProfile(profile, activeProviderId)),
+    profiles: [aiPlatformProvider, ...profiles].map((profile) => publicProviderProfile(profile, activeProviderId)),
     activeProviderId,
   };
 }
 
 function publicSettings(settings) {
   if (!settings) return null;
-  const { provider, providerProfiles, activeProviderId, ...rest } = settings;
+  const { provider, providerProfiles, activeProviderId, aiPlatformApiKey, ...rest } = settings;
   const publicProvider = publicProviderPayload(settings);
   return {
     ...rest,
@@ -609,12 +617,28 @@ function notFoundError(message) {
 
 async function updateProviderSettings(provider) {
   const settings = (await readSettings()) || {};
-  const { profiles } = getProviderProfileState(settings);
+  const { profiles, aiPlatformProvider } = getProviderProfileState(settings);
   const requestedId = normalizeHistoryId(provider?.id);
   if (requestedId === AI_PLATFORM_PROVIDER_ID) {
-    const error = new Error("AI中台是内置途径，不能修改。");
-    error.status = 400;
-    throw error;
+    const apiKey = normalizeString(provider?.apiKey, "") || aiPlatformProvider.apiKey;
+    if (!apiKey) {
+      const error = new Error("请填写 AI中台 Key。");
+      error.status = 400;
+      throw error;
+    }
+    if (/^Bearer\s+/i.test(apiKey)) {
+      const error = new Error("只需填写 sk- 开头的 Key，不要填写 Bearer 前缀。");
+      error.status = 400;
+      throw error;
+    }
+    const nextSettings = {
+      ...settings,
+      aiPlatformApiKey: apiKey,
+      aiPlatformUpdatedAt: new Date().toISOString(),
+      activeProviderId: AI_PLATFORM_PROVIDER_ID,
+    };
+    await writeSettings(nextSettings);
+    return publicProviderPayload(nextSettings);
   }
   const existingIndex = requestedId ? profiles.findIndex((profile) => profile.id === requestedId) : -1;
   if (requestedId && existingIndex < 0) {
@@ -686,12 +710,10 @@ async function deleteProviderSettings(id) {
 
 async function readProviderProfileKey(id) {
   const settings = (await readSettings()) || {};
-  const { profiles } = getProviderProfileState(settings);
+  const { profiles, aiPlatformProvider } = getProviderProfileState(settings);
   const profileId = normalizeHistoryId(id);
   if (profileId === AI_PLATFORM_PROVIDER_ID) {
-    const error = new Error("AI中台不使用 Key。");
-    error.status = 400;
-    throw error;
+    return aiPlatformProvider.apiKey;
   }
   const profile = profiles.find((item) => item.id === profileId);
   if (!profile) {
@@ -702,8 +724,17 @@ async function readProviderProfileKey(id) {
 
 async function providerDraftToConfig(provider) {
   const settings = (await readSettings()) || {};
-  const { profiles } = getProviderProfileState(settings);
+  const { profiles, aiPlatformProvider } = getProviderProfileState(settings);
   const requestedId = normalizeHistoryId(provider?.id);
+  if (requestedId === AI_PLATFORM_PROVIDER_ID) {
+    const apiKey = normalizeString(provider?.apiKey, "") || aiPlatformProvider.apiKey;
+    if (/^Bearer\s+/i.test(apiKey)) {
+      const error = new Error("只需填写 sk- 开头的 Key，不要填写 Bearer 前缀。");
+      error.status = 400;
+      throw error;
+    }
+    return { id: AI_PLATFORM_PROVIDER_ID, adapter: "ai-platform", apiKey };
+  }
   const existing = requestedId ? profiles.find((profile) => profile.id === requestedId) : null;
   if (requestedId && !existing) {
     throw notFoundError("Provider profile not found.");
@@ -1367,7 +1398,7 @@ async function downloadAiPlatformImages(urls, signal) {
   return saveGeneratedImages(images, "png", "result");
 }
 
-async function executeAiPlatformJob({ historyId, payload, sourceBody, referenceFiles = [], taskIds = [], controller }) {
+async function executeAiPlatformJob({ historyId, apiKey, payload, sourceBody, referenceFiles = [], taskIds = [], controller }) {
   const ext = buildAiPlatformExt(payload, sourceBody);
   let upstreamTaskIds = taskIds.map(String).filter(Boolean);
   let temporaryReferenceUrls = [];
@@ -1380,6 +1411,7 @@ async function executeAiPlatformJob({ historyId, payload, sourceBody, referenceF
           })
         : [];
       upstreamTaskIds = await createAiPlatformTasks({
+        apiKey,
         ext,
         count: payload.n,
         referenceUrls: temporaryReferenceUrls,
@@ -1393,6 +1425,7 @@ async function executeAiPlatformJob({ historyId, payload, sourceBody, referenceF
     }
 
     const result = await pollAiPlatformTasks(upstreamTaskIds, {
+      apiKey,
       signal: controller.signal,
       dispatcher: directDispatcher,
     });
@@ -1441,6 +1474,8 @@ async function failAiPlatformHistory(historyId, error) {
 }
 
 async function resumeAiPlatformJobs() {
+  const settings = (await readSettings()) || {};
+  const { aiPlatformProvider } = getProviderProfileState(settings);
   historyStore.listRunning(AI_PLATFORM_PROVIDER_ID).forEach((item) => {
       if (!Array.isArray(item.upstreamTaskIds) || !item.upstreamTaskIds.length || !item.requestPayload) {
         failAiPlatformHistory(item.id, new Error("服务重启时 AI中台任务尚未完成提交，请重新生成。")).catch(console.error);
@@ -1450,6 +1485,7 @@ async function resumeAiPlatformJobs() {
       activeJobs.set(item.id, { controller, mode: item.mode, providerId: AI_PLATFORM_PROVIDER_ID });
       executeAiPlatformJob({
         historyId: item.id,
+        apiKey: aiPlatformProvider.apiKey,
         payload: item.requestPayload,
         sourceBody: item.config || {},
         taskIds: item.upstreamTaskIds,
@@ -1622,6 +1658,11 @@ app.delete("/api/provider-settings/:id", async (request, response, next) => {
 app.post("/api/provider-settings/verify", async (request, response, next) => {
   try {
     const provider = await providerDraftToConfig(request.body || {});
+    if (provider.adapter === "ai-platform") {
+      await verifyAiPlatformApiKey({ apiKey: provider.apiKey, dispatcher: directDispatcher });
+      response.json({ ok: true, provider: AI_PLATFORM_PROVIDER_ID });
+      return;
+    }
     requireProviderConfig(provider);
     await assertProviderBaseUrlAllowed(provider.baseUrl);
     const upstreamResponse = await fetchDeer(
@@ -1721,7 +1762,12 @@ app.post("/api/generate", async (request, response, next) => {
   try {
     const provider = await readProviderSettings();
     const usesAiPlatform = provider.adapter === "ai-platform";
-    if (!usesAiPlatform) {
+    if (usesAiPlatform && !provider.apiKey) {
+      const error = new Error("请先在模型设置中配置 AI中台 Key。");
+      error.status = 400;
+      error.code = "ai_platform_api_key_required";
+      throw error;
+    } else if (!usesAiPlatform) {
       requireProviderConfig(provider);
       await assertProviderBaseUrlAllowed(provider.baseUrl);
     }
@@ -1748,6 +1794,7 @@ app.post("/api/generate", async (request, response, next) => {
     if (usesAiPlatform) {
       const clientData = await executeAiPlatformJob({
         historyId: history.id,
+        apiKey: provider.apiKey,
         payload,
         sourceBody: request.body,
         controller,
@@ -1833,7 +1880,12 @@ app.post(
     try {
       const provider = await readProviderSettings();
       const usesAiPlatform = provider.adapter === "ai-platform";
-      if (!usesAiPlatform) {
+      if (usesAiPlatform && !provider.apiKey) {
+        const error = new Error("请先在模型设置中配置 AI中台 Key。");
+        error.status = 400;
+        error.code = "ai_platform_api_key_required";
+        throw error;
+      } else if (!usesAiPlatform) {
         requireProviderConfig(provider);
         await assertProviderBaseUrlAllowed(provider.baseUrl);
       }
@@ -1896,6 +1948,7 @@ app.post(
       if (usesAiPlatform) {
         const clientData = await executeAiPlatformJob({
           historyId: history.id,
+          apiKey: provider.apiKey,
           payload,
           sourceBody: request.body,
           referenceFiles: images,
