@@ -305,6 +305,61 @@ try {
     "https://litter.catbox.moe/test-1.png",
     "https://litter.catbox.moe/test-2.png",
   ]);
+  assert.equal(editCreates[0].ext.model_version, "image2_medium");
+  assert.equal("background" in editCreates[0].ext, false);
+
+  const sunburst = await api("/api/generate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      clientRequestId: "ai-platform-sunburst",
+      model: "image2.5_sunburst",
+      prompt: "transparent sunburst",
+      sizeMode: "ratio",
+      aspectRatio: "1:1",
+      resolution: "2K",
+      quality: "xhigh",
+      outputFormat: "png",
+      background: "transparent",
+      count: 1,
+    }),
+  });
+  assert.equal(sunburst.images.length, 1);
+  const sunburstCreate = createRequests.find((entry) => entry.ext?.prompt === "transparent sunburst");
+  assert.equal(sunburstCreate.ext.model_version, "image2.5_sunburst_xhigh");
+  assert.equal(sunburstCreate.ext.background, "transparent");
+  assert.equal(sunburstCreate.ext.resolution, "2K");
+
+  const flareForm = new FormData();
+  Object.entries({
+    clientRequestId: "ai-platform-flare",
+    model: "image2.5_flare",
+    prompt: "transparent flare edit",
+    sizeMode: "preset",
+    size: "1024x1024",
+    quality: "max",
+    outputFormat: "png",
+    background: "transparent",
+    count: "1",
+  }).forEach(([key, value]) => flareForm.set(key, value));
+  flareForm.append("image[]", new File([pngBuffer(800, 1200)], "flare.png", { type: "image/png" }));
+  const flare = await api("/api/edit", { method: "POST", body: flareForm });
+  assert.equal(flare.images.length, 1);
+  const flareCreate = createRequests.find((entry) => entry.ext?.prompt === "transparent flare edit");
+  assert.equal(flareCreate.ext.model_version, "image2.5_flare_max");
+  assert.equal(flareCreate.ext.background, "transparent");
+  assert.equal(flareCreate.ext.image_url.length, 1);
+  const modelHistory = await historyItems();
+  assert.equal(modelHistory.find((item) => item.id === "ai-platform-sunburst").config.model, "image2.5_sunburst");
+  assert.equal(modelHistory.find((item) => item.id === "ai-platform-sunburst").config.background, "transparent");
+  assert.equal(modelHistory.find((item) => item.id === "ai-platform-flare").config.quality, "max");
+
+  const invalidBackground = await fetch(`http://127.0.0.1:${appPort}/api/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: "gpt-image-2", prompt: "invalid transparent image2", background: "transparent" }),
+  });
+  assert.equal(invalidBackground.status, 400);
 
   const resumeRequest = fetch(`http://127.0.0.1:${appPort}/api/generate`, {
     method: "POST",

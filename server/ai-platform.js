@@ -100,11 +100,14 @@ function resolutionFromSize(size) {
 export function buildAiPlatformExt(payload, body = {}) {
   const sizeMode = body.sizeMode === "ratio" ? "ratio" : "preset";
   const requestedResolution = ["1K", "2K", "4K"].includes(body.resolution) ? body.resolution : "1K";
+  const versionPrefix = ["image2.5_sunburst", "image2.5_flare"].includes(payload.model) ? payload.model : "image2";
+  const quality = payload.quality === "auto" ? "high" : payload.quality;
   return {
     prompt: payload.prompt,
-    model_version: payload.quality === "low" ? "image2_low" : payload.quality === "medium" ? "image2_medium" : "image2_high",
+    model_version: `${versionPrefix}_${quality}`,
     aspect_radio: nearestAspectRatio(payload.size),
     resolution: sizeMode === "ratio" ? requestedResolution : resolutionFromSize(payload.size),
+    ...(versionPrefix !== "image2" && payload.background ? { background: payload.background } : {}),
   };
 }
 

@@ -82,6 +82,8 @@ const MAX_ASPECT_RATIO = 3;
 
 const OUTPUT_FORMATS = new Set(["png", "jpeg"]);
 const QUALITIES = new Set(["low", "medium", "high", "auto"]);
+const IMAGE25_QUALITIES = new Set(["low", "medium", "high", "xhigh", "max", "auto"]);
+const IMAGE25_MODELS = new Set(["image2.5_sunburst", "image2.5_flare"]);
 const BACKGROUNDS = new Set(["transparent", "opaque", "auto"]);
 const ASPECT_RATIOS = new Set(["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"]);
 const RESOLUTIONS = new Set(["1K", "2K", "4K"]);
@@ -1048,7 +1050,12 @@ function buildPayload(body, mode, options = {}) {
     error.status = 400;
     throw error;
   }
-  if (!QUALITIES.has(quality)) {
+  if (model !== "gpt-image-2" && !IMAGE25_MODELS.has(model)) {
+    const error = new Error(`Invalid model "${model}".`);
+    error.status = 400;
+    throw error;
+  }
+  if (!(model === "gpt-image-2" ? QUALITIES : IMAGE25_QUALITIES).has(quality)) {
     const error = new Error(`Invalid quality "${quality}".`);
     error.status = 400;
     throw error;
@@ -1772,9 +1779,13 @@ app.post("/api/generate", async (request, response, next) => {
       await assertProviderBaseUrlAllowed(provider.baseUrl);
     }
     payload = buildPayload(request.body, "generate");
+    if (!usesAiPlatform && payload.model !== "gpt-image-2") {
+      const error = new Error("Image 2.5 目前仅支持 AI中台，请切换模型 Key。");
+      error.status = 400;
+      throw error;
+    }
     if (usesAiPlatform) {
       payload.output_format = "png";
-      delete payload.background;
     }
     const clientRequestId = normalizeHistoryId(request.body?.clientRequestId);
     history = await appendHistory({
@@ -1904,9 +1915,13 @@ app.post(
 
       const referenceDimensions = getImageDimensions(images[0]);
       payload = buildPayload(request.body, "edit", { referenceDimensions });
+      if (!usesAiPlatform && payload.model !== "gpt-image-2") {
+        const error = new Error("Image 2.5 目前仅支持 AI中台，请切换模型 Key。");
+        error.status = 400;
+        throw error;
+      }
       if (usesAiPlatform) {
         payload.output_format = "png";
-        delete payload.background;
       }
       const formData = new FormData();
       formData.set("model", payload.model);

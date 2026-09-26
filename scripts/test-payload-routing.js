@@ -173,6 +173,13 @@ try {
   const generateData = await generateResponse.json();
   if (generateData.historyId) createdHistoryIds.push(generateData.historyId);
 
+  const unsupportedModelResponse = await fetch(`http://127.0.0.1:${appPort}/api/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: "image2.5_sunburst", prompt: "unsupported external model" }),
+  });
+  const unsupportedModelData = await unsupportedModelResponse.json();
+
   const editForm = new FormData();
   Object.entries({
     model: "gpt-image-2",
@@ -264,6 +271,8 @@ try {
   const smartRatioPayload = editPayloads[1];
   const smartPresetPayload = editPayloads[2];
   const ok =
+    unsupportedModelResponse.status === 400 &&
+    unsupportedModelData.error?.message?.includes("AI中台") &&
     generateResponse.status === 200 &&
     generateData.images?.length === 8 &&
     generatePayload?.n === 8 &&

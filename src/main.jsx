@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { AlertCircleIcon, ArrowUpIcon, CopyIcon, DownloadIcon, EyeIcon, EyeOffIcon, ImagePlusIcon, RotateCcwIcon, SaveIcon, SettingsIcon, StarIcon, UploadIcon } from "lucide-react";
+import { AlertCircleIcon, ArrowUpIcon, CheckIcon, CopyIcon, DownloadIcon, EyeIcon, EyeOffIcon, ImagePlusIcon, RotateCcwIcon, RulerIcon, SaveIcon, SettingsIcon, StarIcon, UploadIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,7 +11,6 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Switch } from "@/components/ui/switch";
 import { Toaster } from "@/components/ui/sonner";
 import { Textarea } from "@/components/ui/textarea";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -37,6 +36,7 @@ import "./styles.css";
 const SMART_SIZE_VALUE = "smart";
 const SMART_ASPECT_RATIO_VALUE = "smart";
 const AI_PLATFORM_PROVIDER_ID = "builtin-ai-platform";
+const DEFAULT_MODEL = "image2.5_sunburst";
 const SMART_LABEL = "智能";
 const DEFAULT_PRESET_SIZE = "1408x480";
 const DEFAULT_SMART_ASPECT_RATIO = "9:16";
@@ -46,6 +46,12 @@ const sizeModeOptions = [
   { value: "ratio", label: "比例+分辨率" },
 ];
 const qualityOptions = ["low", "medium", "high", "auto"];
+const image25QualityOptions = ["low", "medium", "high", "xhigh", "max", "auto"];
+const modelOptions = [
+  { value: "gpt-image-2", label: "Image 2" },
+  { value: "image2.5_sunburst", label: "Image 2.5 Sunburst" },
+  { value: "image2.5_flare", label: "Image 2.5 Flare" },
+];
 const countOptions = [1, 2, 3, 4, 8];
 const aspectRatioOptions = [SMART_ASPECT_RATIO_VALUE, "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"];
 const resolutionOptions = ["1K", "2K", "4K"];
@@ -68,7 +74,7 @@ const RESOLUTION_LONG_EDGE = {
 
 const initialConfig = {
   sizeMode: "preset",
-  model: "gpt-image-2",
+  model: DEFAULT_MODEL,
   prompt: "A simple red apple on a white background",
   size: SMART_SIZE_VALUE,
   quality: "low",
@@ -134,18 +140,18 @@ function createNewWorkspaceDefaults(config = initialConfig) {
   };
 }
 
-function loadNewWorkspaceDefaults(model = initialConfig.model) {
-  if (typeof window === "undefined") return createRefreshConfig(model);
+function loadNewWorkspaceDefaults() {
+  if (typeof window === "undefined") return createRefreshConfig();
 
   try {
     const rawDefaults = window.localStorage?.getItem(NEW_WORKSPACE_DEFAULTS_STORAGE_KEY);
-    if (!rawDefaults) return createRefreshConfig(model);
+    if (!rawDefaults) return createRefreshConfig();
     return createNewWorkspaceDefaults({
-      ...createRefreshConfig(model),
+      ...createRefreshConfig(),
       ...JSON.parse(rawDefaults),
     });
   } catch {
-    return createRefreshConfig(model);
+    return createRefreshConfig();
   }
 }
 
@@ -1935,13 +1941,18 @@ function App({ initialSettings }) {
   const savedSettingsRef = useRef(initialSettings || loadSavedSettings());
   const newWorkspaceDefaultsRef = useRef(null);
   if (!newWorkspaceDefaultsRef.current) {
-    newWorkspaceDefaultsRef.current = loadNewWorkspaceDefaults(savedSettingsRef.current.config?.model);
+    newWorkspaceDefaultsRef.current = loadNewWorkspaceDefaults();
   }
   const initialWorkspaceRef = useRef(null);
   if (!initialWorkspaceRef.current) {
     initialWorkspaceRef.current = createWorkspace({
       mode: "generate",
-      config: savedSettingsRef.current.config,
+      config: {
+        ...savedSettingsRef.current.config,
+        ...(savedSettingsRef.current.source === "default" && savedSettingsRef.current.provider?.adapter && savedSettingsRef.current.provider.adapter !== "ai-platform"
+          ? { model: "gpt-image-2" }
+          : {}),
+      },
     });
   }
 
@@ -1975,6 +1986,7 @@ function App({ initialSettings }) {
   const [providerDraft, setProviderDraft] = useState(() => createProviderDraft(savedSettingsRef.current.provider));
   const [providerBusy, setProviderBusy] = useState("");
   const [providerResult, setProviderResult] = useState(null);
+  const [sizeModeOpen, setSizeModeOpen] = useState(false);
   const [attentionPending, setAttentionPending] = useState(false);
   const [referenceDraftReady, setReferenceDraftReady] = useState(false);
   const activeRequestsRef = useRef(new Map());
@@ -2334,6 +2346,12 @@ function App({ initialSettings }) {
       config: {
         ...workspace.config,
         [key]: value,
+        ...(key === "model" && value === "gpt-image-2"
+          ? {
+              background: "auto",
+              quality: ["xhigh", "max"].includes(workspace.config.quality) ? "high" : workspace.config.quality,
+            }
+          : {}),
       },
     }));
   }
@@ -2935,7 +2953,6 @@ function App({ initialSettings }) {
     const baseConfig = {
       ...workspace.config,
       outputFormat: "png",
-      background: "auto",
     };
     const workspaceConfig = resolveConfigForSubmission(baseConfig, submissionMode, workspaceDimensions);
     const sourceSnapshot = submissionMode === "edit" ? createLocalSourceSnapshot(imageFiles, null) : null;
@@ -3093,7 +3110,7 @@ function App({ initialSettings }) {
     const workspace = createWorkspace({
       config: {
         ...newWorkspaceDefaultsRef.current,
-        model: config.model,
+        model: provider.adapter === "ai-platform" ? newWorkspaceDefaultsRef.current.model : "gpt-image-2",
       },
     });
     setWorkspaces((current) => [workspace, ...current]);
@@ -3111,12 +3128,12 @@ function App({ initialSettings }) {
   }
 
   function restoreFactoryParameters() {
-    const factoryDefaults = createRefreshConfig(config.model);
+    const factoryDefaults = createRefreshConfig(provider.adapter === "ai-platform" ? DEFAULT_MODEL : "gpt-image-2");
     if (!clearNewWorkspaceDefaultsLocally()) {
       showToast("默认参数恢复失败。", "error");
       return;
     }
-    newWorkspaceDefaultsRef.current = factoryDefaults;
+    newWorkspaceDefaultsRef.current = createRefreshConfig();
     updateActiveWorkspace((workspace) => ({
       ...workspace,
       config: {
@@ -3617,24 +3634,62 @@ function App({ initialSettings }) {
               </div>
             </div>
 
-            <Field label="尺寸控制">
-              <ToggleGroup
-                className="segmented-control"
-                type="single"
-                value={config.sizeMode}
-                onValueChange={(value) => {
-                  if (value) updateConfig("sizeMode", value);
-                }}
-                variant="outline"
-                spacing={0}
-              >
-                {sizeModeOptions.map((option) => (
-                  <ToggleGroupItem className="segmented-item" key={option.value} value={option.value}>
-                    {option.label}
-                  </ToggleGroupItem>
-                ))}
-              </ToggleGroup>
-            </Field>
+            <div className="model-controls">
+              <Field label="模型">
+                <Select value={config.model} onValueChange={(value) => updateConfig("model", value)}>
+                  <SelectTrigger className="field-select"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {modelOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value} disabled={provider.adapter !== "ai-platform" && option.value !== "gpt-image-2"}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field label="透明背景">
+                <div className="background-switch-row">
+                  <Switch
+                    checked={config.background === "transparent"}
+                    disabled={config.model === "gpt-image-2"}
+                    onCheckedChange={(checked) => updateConfig("background", checked ? "transparent" : "auto")}
+                    aria-label="透明背景"
+                  />
+                </div>
+              </Field>
+              <div className="size-mode-control">
+                <Tooltip>
+                  <Popover open={sizeModeOpen} onOpenChange={setSizeModeOpen}>
+                    <TooltipTrigger asChild>
+                      <PopoverTrigger asChild>
+                        <Button variant="outline" size="icon" type="button" aria-label={`尺寸控制：${sizeModeOptions.find((option) => option.value === config.sizeMode)?.label || "直接尺寸"}`}>
+                          <RulerIcon aria-hidden="true" />
+                        </Button>
+                      </PopoverTrigger>
+                    </TooltipTrigger>
+                    <PopoverContent align="end" className="size-mode-menu">
+                      {sizeModeOptions.map((option) => (
+                        <Button
+                          key={option.value}
+                          type="button"
+                          variant="ghost"
+                          className="size-mode-option"
+                          aria-pressed={config.sizeMode === option.value}
+                          onClick={() => {
+                            updateConfig("sizeMode", option.value);
+                            setSizeModeOpen(false);
+                          }}
+                        >
+                          {option.label}
+                          {config.sizeMode === option.value && <CheckIcon aria-hidden="true" />}
+                        </Button>
+                      ))}
+                    </PopoverContent>
+                  </Popover>
+                  <TooltipContent side="top">尺寸控制：{sizeModeOptions.find((option) => option.value === config.sizeMode)?.label}</TooltipContent>
+                </Tooltip>
+              </div>
+            </div>
 
             {config.sizeMode === "preset" ? (
               <SelectField label="尺寸" value={config.size} onChange={(value) => updateConfig("size", value)} options={sizeOptions} />
@@ -3656,7 +3711,7 @@ function App({ initialSettings }) {
             )}
 
             <div className="field-grid two">
-              <SelectField label="质量" value={config.quality} onChange={(value) => updateConfig("quality", value)} options={qualityOptions} />
+              <SelectField label="质量" value={config.quality} onChange={(value) => updateConfig("quality", value)} options={config.model === "gpt-image-2" ? qualityOptions : image25QualityOptions} />
               <SelectField label="数量" value={String(config.count)} onChange={(value) => updateConfig("count", Number(value))} options={countOptions.map(String)} />
             </div>
 
